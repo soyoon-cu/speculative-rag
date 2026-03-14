@@ -1,6 +1,6 @@
 # Speculative RAG: Latency-Quality Trade-offs in Multi-Draft Retrieval
 
-An end-to-end implementation of the Speculative Retrieval-Augmented Generation (Speculative RAG) pipeline, designed to quantify the trade-off between answer quality and inference latency on knowledge-intensive QA tasks.
+An end-to-end implementation of the [Speculative Retrieval-Augmented Generation (Speculative RAG)](doc/speculative-rag-iclr2025.pdf) pipeline, designed to quantify the trade-off between answer quality and inference latency on knowledge-intensive QA tasks.
 
 ## Project Objective
 
@@ -93,7 +93,7 @@ This project is licensed under the **MIT License** — see the [LICENSE](LICENSE
 
 ## References
 
-- Wang, Z., et al. "SPECULATIVE RAG: ENHANCING RETRIEVAL AUGMENTED GENERATION THROUGH DRAFTING." ICLR 2025.
+- Wang, Z., et al. "SPECULATIVE RAG: ENHANCING RETRIEVAL AUGMENTED GENERATION THROUGH DRAFTING." ICLR 2025. ([paper PDF](doc/speculative-rag-iclr2025.pdf))
 
 - Asai, A., et al. "Self-RAG: Learning to Retrieve, Generate, and Critique through Self-Reflection." ICLR 2024.
 

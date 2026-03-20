@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.venv/
+.uv/
+
+# Testing / dev
+tests/
+.pytest_cache/
+.coverage
+
+# Terraform / infra
+infra/
+
+# Local data (large; downloaded inside container)
+/data/
+
+# Results
+output/
+
+# Secrets
+.env
+.env.local
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# Git
+.git/
+.gitignore
+
+# Docs
+*.md

@@ -58,12 +58,55 @@ Evaluated on knowledge-intensive datasets such as TriviaQA or PubHealth. Metrics
 
 - **CRAG-Inspired (Filter-then-Generate):** Lightweight filtering/reranking of retrieved chunks followed by generation with shorter context.
 
-## Code Instruction
+## Repository Structure
 
-### Setup
-Ensure `uv` is installed in your environment. <br>
-After cloning the Git repo, run: <br>
-`uv sync`
+```
+speculative-rag/
+├── doc/
+│   └── speculative-rag-iclr2025.pdf
+├── standard-rag/          ← Standard RAG baseline (implemented)
+│   ├── README.md          ← full setup & run instructions
+│   ├── Makefile
+│   ├── Dockerfile
+│   ├── pyproject.toml
+│   ├── infra/             ← Terraform: GCS, Artifact Registry, service account
+│   └── src/rag/
+└── speculative-rag/       ← Speculative RAG implementation (in progress)
+```
+
+Each subdirectory is an independent project with its own environment, Docker image, and GCP infrastructure.
+
+## Status
+
+| Component             | Status        | Notes |
+|-----------------------|---------------|-------|
+| Standard RAG baseline | **Complete**  | Vertex AI pipeline; see `standard-rag/` |
+| Speculative RAG       | In progress   | |
+
+## Getting Started
+
+See **[standard-rag/README.md](standard-rag/README.md)** for the full setup guide including:
+- GCP project configuration and API enablement
+- GPU quota increase instructions (required — new projects default to 0 GPU quota)
+- Terraform infra provisioning
+- Docker build and push
+- Running smoke tests and full evaluation on Vertex AI
+
+### Quick reference
+
+```bash
+cd standard-rag
+
+# First-time setup
+make gcp-enable-apis     # enable Vertex AI, Artifact Registry, GCS APIs
+make infra-apply         # provision GCS bucket + Artifact Registry
+make docker-push         # build and push the container image
+
+# Run evaluation
+make vertex-submit               # smoke test (100k passages, 500 examples)
+make vertex-submit ENV=prod      # full eval (21M passages, 11k examples)
+make fetch-results               # download results.json and print table
+```
 
 ## Demo Dashboard
 
@@ -76,6 +119,14 @@ The project includes a live performance dashboard featuring:
 - **Verifier Scoring Breakdown:** Visualization of the score components used for final selection.
 
 - **Rationale Inspection:** Real-time viewing of document-grounded rationales.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the team, branch workflow, commit style, and code standards.
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for guidance on secret management, GCP service account scoping, and what to do if a credential is accidentally exposed.
 
 ## Team
 
@@ -93,12 +144,4 @@ This project is licensed under the **MIT License** — see the [LICENSE](LICENSE
 
 ## References
 
-- Wang, Z., et al. "SPECULATIVE RAG: ENHANCING RETRIEVAL AUGMENTED GENERATION THROUGH DRAFTING." ICLR 2025. ([paper PDF](doc/speculative-rag-iclr2025.pdf))
-
-- Asai, A., et al. "Self-RAG: Learning to Retrieve, Generate, and Critique through Self-Reflection." ICLR 2024.
-
-- Yan, S.-Q., et al. "Corrective Retrieval Augmented Generation." arXiv:2401.15884.
-
-- Hsieh, C.-Y., et al. "Distilling Step-by-Step! Outperforming Larger Language Models with Less Training Data." ACL 2023.
-
-- Leviathan, Y., et al. "Fast Inference from Transformers via Speculative Decoding." ICML 2023.
+- Wang et al., *Speculative RAG: Enhancing Retrieval Augmented Generation Through Drafting*, ICLR 2025. ([paper PDF](doc/speculative-rag-iclr2025.pdf))

@@ -1,0 +1,61 @@
+[project]
+name = "speculative-rag"
+version = "0.1.0"
+description = "Speculative RAG: Enhancing RAG Through Drafting (ICLR 2025)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "datasets>=2.18.0",
+    "huggingface-hub>=0.22.0",
+    "transformers>=4.40.0,<4.50.0",
+    # Torch is needed for both Mac and Linux
+    "torch>=2.2.0",
+    "faiss-cpu>=1.7.4",
+    "numpy>=1.26.0",
+    "scikit-learn>=1.4.0",  # MANDATORY: Added for K-Means Clustering
+    "tqdm>=4.66.0",
+    "python-dotenv>=1.0.0",
+    "rich>=13.7.0",
+    "typer>=0.12.0",
+    # vLLM is Linux-only. uv will ignore this on your M3 Pro.
+    "vllm>=0.4.3; sys_platform == 'linux'",
+]
+
+[project.optional-dependencies]
+gpu = [
+    "faiss-gpu>=1.7.2",
+]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.4.0",
+]
+
+[project.scripts]
+# This allows you to run 'spec-rag' from the terminal to launch your test
+spec-rag = "pipeline:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# This tells the build system to look directly in 'src' for your modules
+# like 'sampling', 'data', 'drafter', and 'verifier'
+packages = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# Ignore B008 errors for Typer CLI pattern
+"src/pipeline.py" = ["B008"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

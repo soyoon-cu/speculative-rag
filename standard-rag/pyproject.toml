@@ -1,0 +1,56 @@
+[project]
+name = "standard-rag"
+version = "0.1.0"
+description = "Standard RAG baseline"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "datasets>=2.18.0",
+    "huggingface-hub>=0.22.0",
+    "transformers>=4.40.0,<4.50.0",
+    "torch>=2.2.0; sys_platform != 'linux'",
+    "faiss-cpu>=1.7.4",
+    "numpy>=1.26.0",
+    "tqdm>=4.66.0",
+    "python-dotenv>=1.0.0",
+    "rich>=13.7.0",
+    "typer>=0.12.0",
+]
+
+[project.optional-dependencies]
+gpu = [
+    "faiss-gpu>=1.7.2",
+]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.4.0",
+]
+
+[project.scripts]
+rag-eval = "rag.pipeline:main"
+rag-index = "rag.retrieval.index:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rag"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# B008: typer.Option/Argument in function defaults is the intended Typer pattern
+"src/rag/pipeline.py" = ["B008"]
+"src/rag/retrieval/index.py" = ["B008"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

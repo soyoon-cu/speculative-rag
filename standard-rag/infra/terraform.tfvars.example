@@ -1,0 +1,7 @@
+# Copy to terraform.tfvars and fill in your values.
+# Do NOT commit terraform.tfvars — it is gitignored.
+
+project_id      = "speculative-rag"
+region          = "us-central1"
+project_name    = "standard-rag"
+gcs_bucket_name = "standard-rag-bucket"

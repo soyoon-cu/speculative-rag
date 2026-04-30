@@ -1,10 +1,9 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[ ]:
+# In[6]:
 
 
-get_ipython().system('jupyter nbconvert --to script draft_output.ipynb')
 
 
 # In[2]:
@@ -33,29 +32,6 @@ import torch.nn.functional as F
 
 
 
-# In[4]:
-
-
-# (L4/A100)
-# !pip install vllm bitsandbytes
-# from transformers import BitsAndBytesConfig
-# VLLM_AVAILABLE = True
-# BNB_AVAILABLE = True
-
-# mps
-# VLLM_AVAILABLE = False
-# BNB_AVAILABLE = False
-
-# Model names
-# MODEL_MISTRAL_7B        = "mistralai/Mistral-7B-v0.1"
-# MODEL_MISTRAL_INSTRUCT  = "mistralai/Mistral-7B-Instruct-v0.1"
-
-# mps
-# MODEL_PHI2   = "microsoft/phi-2"           
-# MODEL_TINYLLAMA = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"  
-
-
-
 # In[ ]:
 
 
@@ -71,14 +47,16 @@ class DraftOutput:
     answer_draft : str
     rationale : str
     draft_logprob : float
-    model_output : str = field(repr = False, default = '')
+    raw_model_output : str = field(repr = False, default = '')
 
-    # Prompt construction (paper Appendix H verbatim)
-    SYSTEM_PROMPT = (
-        'Response to the instruction. '
-        'Also provide rationale for your response.\n\n'
-    )
+# Prompt construction (paper Appendix H verbatim)
+SYSTEM_PROMPT = (
+    'Response to the instruction. '
+    'Also provide rationale for your response.\n\n'
+)
 
+
+    @static method
     def build_drafter_prompt(question, docs):
         '''
         Format (Q, doc subset) into drafter input
@@ -94,6 +72,7 @@ class DraftOutput:
             f"## Rationale :"
         )
 
+    @static method
     def parse_draft_output(response):
         '''
         Parse the model response into (rationale, answer_draft)
@@ -121,6 +100,7 @@ class DraftOutput:
         return rationale, answer_draft
 
 
+    @static method
     def compute_seq_logprob(scores, generated_ids):
         '''
 

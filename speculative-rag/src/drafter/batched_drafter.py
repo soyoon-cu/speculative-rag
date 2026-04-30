@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[ ]:
+# In[4]:
 
 
-
+get_ipython().system('jupyter nbconvert --to script batched_drafter.ipynb')
 
 
 # In[ ]:
@@ -21,7 +21,7 @@
 
 import drafter_pipeline as dp
 from draft_output import DraftOutput
-import vllm_ 
+from vllm_ import VLLM
 
 
 # In[ ]:
@@ -42,6 +42,13 @@ from torch.profiler import ProfilerActivity, profile, record_function
 from transformers import AutoModelForCausalLM, AutoTokenizer
 logging.basicConfig(level=logging.INFO, format='%(levelname)s | %(message)s')
 logger = logging.getLogger(__name__)
+
+
+# In[ ]:
+
+
+# Initialise
+DraftOutput_ = DraftOutput()
 
 
 # In[ ]:
@@ -87,7 +94,8 @@ class BatchedDrafter:
             self.device, model_name, self.use_vllm, self.use_bnb_nf4
         )
         if self.use_vllm:
-            vllm_.load_vllm(model_name)
+            _vllm = VLLM()
+            self.vllm_llm, self.vllm_sampling = _vllm.load_vllm(model_name)
         else:
             self.load_transformers(model_name)
 
@@ -191,7 +199,7 @@ class BatchedDrafter:
         gen_ids = gen_out.sequences[:, input_len:]
         # per-draft log_probs
         # gen_out.scores -> tuple of len = gen_len, each tensor (m, vocab_size)
-        DraftOutput_ = DraftOutput()
+
         logprobs_batch = DraftOutput_.compute_seq_logprob(gen_out.scores, gen_ids) # (m, )
 
         # Decode
@@ -201,6 +209,135 @@ class BatchedDrafter:
             clean_up_tokenization_spaces = True,
         )
         return list(zip(completions, logprobs_batch.cpu().tolist()))
+
+
+    def generate_drafts(self,question,subsets,profile_run = dp.PROFILE_RUN, profile_dir = '/profiler_traces'):
+        '''
+        For each doc subset:
+        -Build drafter prompt from DraftOutput
+        -Batch all m prompts into one forward pass
+        -Decode completions and parse (rationale, answer_draft)
+        -Record log prob of answer draft per subset
+
+        Args:
+        -question - query Q
+        -subsets : from  MultiPerspectiveSampler.generate_subsets(),
+                    shape: list of m lists, each with k document strings
+        -profile_run : True-> PyTorch profiler and writes a Chrome trace + TensorBoard events
+        -profile_dir : output directory for profiler traces 
+
+        Returns:
+        list[DraftOutput]  — m DraftOutputs, one per (valid) subset.
+        '''
+
+        if not subsets:
+            logger.warning('call generate_subsets()')
+            return []
+
+        valid_pairs = [(i,s) for i, s in enumerate(subsets) if s]
+        if not valid_pairs:
+            logger.warning("All subsets were empty — returning no drafts.")
+            return []
+        indices = [i for i, _ in valid_pairs]
+        docs_list = [s for _,s in valid_pairs] # list containing list of docs
+        m = len(docs_list)
+
+        # Build all m prompts
+        prompts = [DraftOutput_.build_drafter_prompt(question, docs) for docs in docs_list]
+
+        logger.info(
+            "Generating %d drafts  k=%d docs/subset  device=%s",
+            m, len(docs_list[0]), self.device,
+        )
+
+
+        if self.use_vllm:
+            raw_outputs = _vllm.generate_vllm(prompts, self.vllm_llm, self.vllm_sampling)
+        elif profile_run:
+            raw_outputs = self.generate_with_profiler(prompts, profile_dir)
+        else:
+            raw_outputs = self.generate_transformers(prompts)
+
+        # Parse 
+        drafts = []
+        for subset_idx, (completion, logprob) in zip(indices, raw_outputs):
+            rationale, answer_draft = DraftOutput_.parse_draft_output(completion)
+            drafts.append(DraftOutput_(
+                subset_index = subset_idx,
+                answer_draft = answer_draft,
+                rationale = rationale,
+                draft_logprob = logprob,
+                raw_model_output = completion,
+            ))
+
+        logger.info("Drafting complete — %d/%d drafts produced.", len(drafts), m)
+        return drafts
+
+    def generate_with_profiler(self, prompts, profile_dir):
+        '''
+        Outputs
+        -TensorBoard trace events
+        -Chrome JSON trace
+        '''
+        Path(profile_dir).mkdir(parents = True, exist_ok = True)
+        chrome_trace = str(Path(profile_dir) / 'drafter_trace.json')
+        activities = [ProfilerActivity.CPU]
+        if self.is_cuda:
+            activities.append(ProfilerActivity.CUDA)
+
+        if self.is_mps:
+            activities.append(ProfilerActivity.MPS)
+
+        logger.info(
+                "Profiling with activities=%s → trace: %s",
+                [a.name for a in activities], chrome_trace,
+            )
+
+        with profile(
+            activities = activities,
+            record_shapes = True,
+            with_flops = True,
+            profile_memory = True, # tracks peak VRAM
+            with_stack = False,
+            on_trace_ready = torch.profiler.tensorboard_trace_handler(profile_dir),
+        ) as prof:
+            with record_function('batched_drafter.generate'):
+                result = self.generate_transformers(prompts)
+            prof.step()
+
+        # Chrome trace
+        prof.export_chrome_trace(chrome_trace)
+        logger.info("Chrome trace → %s", chrome_trace)
+
+        # Summary table sorted by CPU time
+        print("\n" + "─" * 70)
+            print(f"  Profiler summary  ({len(prompts)} prompts, device={self.device})")
+            print("─" * 70)
+            print(
+                prof.key_averages().table(
+                    sort_by  = "cuda_time_total" if self.is_cuda else "cpu_time_total",
+                    row_limit= 15,
+                )
+            )
+
+        return result
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

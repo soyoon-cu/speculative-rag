@@ -1,25 +1,9 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[4]:
+# In[6]:
 
 
-get_ipython().system('jupyter nbconvert --to script batched_drafter.ipynb')
-
-
-# In[ ]:
-
-
-# MAX_NEW_TOKENS = 300   
-# MAX_INPUT_LEN  = 1024  
-# DO_SAMPLE      = False
-# TEMPERATURE    = 1.0
-
-
-# In[ ]:
-
-
-import drafter_pipeline as dp
 from draft_output import DraftOutput
 from vllm_ import VLLM
 
@@ -47,8 +31,13 @@ logger = logging.getLogger(__name__)
 # In[ ]:
 
 
-# Initialise
-DraftOutput_ = DraftOutput()
+MODEL_MISTRAL_7B   = "mistralai/Mistral-7B-v0.1"
+
+
+# In[ ]:
+
+
+
 
 
 # In[ ]:
@@ -60,23 +49,28 @@ in a SINGLE batched forward pass
 '''
 class BatchedDrafter:
     def __init__(
-        self, model_name = None, device= dp.DEVICE,
-        max_new_tokens = dp.MAX_NEW_TOKENS,
-        max_input_len = dp.MAX_INPUT_LEN,
-        use_vllm = dp.VLLM_AVAILABLE,
-        use_bnb_nf4 = dp.BNB_AVAILABLE
+        self, device,
+        max_new_tokens,
+        max_input_len ,
+        use_vllm,
+        use_bnb_nf4,
+        use_int8,
+        DO_SAMPLE,
+        TEMPERATURE,
+        model_name = None
     ):
 
-        self.device = DEVICE
+        self.device = device
+        self.DO_SAMPLE = DO_SAMPLE
+        self.TEMPERATURE = TEMPERATURE
+        self.use_int8 = use_int8
 
-
-
-        self.is_cuda = DEVICE.type == 'cuda'
-        self.is_mps = DEVICE.type == 'mps'
-        self.is_cpu = DEVICE.type == 'cpu'
+        self.is_cuda = device.type == 'cuda'
+        self.is_mps = device.type == 'mps'
+        self.is_cpu = device.type == 'cpu'
 
         if model_name is None:
-            model_name = dp.MODEL_MISTRAL_7B 
+            model_name = MODEL_MISTRAL_7B 
 
         self.max_input_len = max_input_len
         self.max_new_tokens = max_new_tokens
@@ -94,12 +88,14 @@ class BatchedDrafter:
             self.device, model_name, self.use_vllm, self.use_bnb_nf4
         )
         if self.use_vllm:
-            _vllm = VLLM()
-            self.vllm_llm, self.vllm_sampling = _vllm.load_vllm(model_name)
+            self._vllm = VLLM()
+            self.vllm_llm, self.vllm_sampling = self._vllm.load_vllm(model_name,max_new_tokens, 
+                                                                     max_input_len, TEMPERATURE)
         else:
             self.load_transformers(model_name)
 
     # Timing helper
+    @staticmethod
     def sync_time():
         '''Synchronizes GPU'''
         if torch.cuda.is_available():
@@ -110,7 +106,7 @@ class BatchedDrafter:
     def load_transformers(self, model_name):
         'Load tokenizer + model via HuggingFace'
         if self.is_mps : dtype = torch.float16
-        elif self.is_cuda : dtype = torch.bfloat32
+        elif self.is_cuda : dtype = torch.bfloat16
         else: dtype = torch.float32
 
         # Tokenizer
@@ -123,7 +119,7 @@ class BatchedDrafter:
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
 
 
-        model_kwargs = dict{
+        model_kwargs = {
             'torch_dtype':dtype,
             'device_map' : 'auto' if self.is_cuda else None,
         }
@@ -142,19 +138,19 @@ class BatchedDrafter:
 
             logger.info('NF4 4-bit quantization enabled via bitsandbytes')
 
-        if self.is_cuda and not self.use_bnb_nf4:
+        if self.is_cuda and self.use_int8 and not self.use_bnb_nf4:
             model_kwargs['load_in_8bit'] = True 
             logger.info('INT8 quantization enabled via bitsandbytes')
 
         logger.info("Loading %s  dtype=%s  device=%s …", model_name, dtype, self.device)
-        t0=self.sync_time()
+        t0=sync_time()
 
         self.model = AutoModelForCausalLM.from_pretrained(model_name, **model_kwargs)
 
         if not self.is_cuda:
             self.model = self.model.to(self.device)
         self.model.eval()
-        t1 = self.sync_time()
+        t1 = sync_time()
         logger.info("Model ready in %.2f s", t1 - t0)
 
 
@@ -188,8 +184,8 @@ class BatchedDrafter:
             input_ids = input_ids,
             attention_mask = attention_mask,
             max_new_tokens = self.max_new_tokens,
-            do_sample = dp.DO_SAMPLE,
-            temperature = dp.TEMPERATURE,
+            do_sample = self.DO_SAMPLE,
+            temperature = self.TEMPERATURE,
             pad_token_id = self.tokenizer.pad_token_id,
             eos_token_id = self.tokenizer.eos_token_id,
             output_scores = True, # captures per-step logit tensors for log probs
@@ -200,7 +196,7 @@ class BatchedDrafter:
         # per-draft log_probs
         # gen_out.scores -> tuple of len = gen_len, each tensor (m, vocab_size)
 
-        logprobs_batch = DraftOutput_.compute_seq_logprob(gen_out.scores, gen_ids) # (m, )
+        logprobs_batch = DraftOutput.compute_seq_logprob(gen_out.scores, gen_ids) # (m, )
 
         # Decode
         completions = self.tokenizer.batch_decode(
@@ -211,7 +207,7 @@ class BatchedDrafter:
         return list(zip(completions, logprobs_batch.cpu().tolist()))
 
 
-    def generate_drafts(self,question,subsets,profile_run = dp.PROFILE_RUN, profile_dir = '/profiler_traces'):
+    def generate_drafts(self,question,subsets,profile_run=False, profile_dir = '/profiler_traces'):
         '''
         For each doc subset:
         -Build drafter prompt from DraftOutput
@@ -243,7 +239,7 @@ class BatchedDrafter:
         m = len(docs_list)
 
         # Build all m prompts
-        prompts = [DraftOutput_.build_drafter_prompt(question, docs) for docs in docs_list]
+        prompts = [DraftOutput.build_drafter_prompt(question, docs) for docs in docs_list]
 
         logger.info(
             "Generating %d drafts  k=%d docs/subset  device=%s",
@@ -252,7 +248,7 @@ class BatchedDrafter:
 
 
         if self.use_vllm:
-            raw_outputs = _vllm.generate_vllm(prompts, self.vllm_llm, self.vllm_sampling)
+            raw_outputs = self._vllm.generate_vllm(prompts, self.vllm_llm, self.vllm_sampling)
         elif profile_run:
             raw_outputs = self.generate_with_profiler(prompts, profile_dir)
         else:
@@ -261,8 +257,8 @@ class BatchedDrafter:
         # Parse 
         drafts = []
         for subset_idx, (completion, logprob) in zip(indices, raw_outputs):
-            rationale, answer_draft = DraftOutput_.parse_draft_output(completion)
-            drafts.append(DraftOutput_(
+            rationale, answer_draft = DraftOutput.parse_draft_output(completion)
+            drafts.append(DraftOutput(
                 subset_index = subset_idx,
                 answer_draft = answer_draft,
                 rationale = rationale,
@@ -285,7 +281,7 @@ class BatchedDrafter:
         if self.is_cuda:
             activities.append(ProfilerActivity.CUDA)
 
-        if self.is_mps:
+        if self.is_mps and hasattr(ProfilerActivity, 'MPS'):
             activities.append(ProfilerActivity.MPS)
 
         logger.info(
@@ -311,43 +307,16 @@ class BatchedDrafter:
 
         # Summary table sorted by CPU time
         print("\n" + "─" * 70)
-            print(f"  Profiler summary  ({len(prompts)} prompts, device={self.device})")
-            print("─" * 70)
-            print(
-                prof.key_averages().table(
-                    sort_by  = "cuda_time_total" if self.is_cuda else "cpu_time_total",
-                    row_limit= 15,
-                )
+        print(f"  Profiler summary  ({len(prompts)} prompts, device={self.device})")
+        print("─" * 70)
+        print(
+            prof.key_averages().table(
+                sort_by  = "cuda_time_total" if self.is_cuda else "cpu_time_total",
+                row_limit= 15,
             )
+        )
 
         return result
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

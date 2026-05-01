@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[ ]:
+# In[6]:
+
+
 
 
 
@@ -285,6 +287,7 @@ def load_pipeline(model_name, use_vllm ,use_bnb_nf4, index_path = INDEX_PATH, me
         max_input_len  = MAX_INPUT_LEN,
         use_vllm ,
         use_bnb_nf4,
+        use_int8,
         DO_SAMPLE  = DO_SAMPLE,
         TEMPERATURE  = TEMPERATURE,
         model_name,
@@ -292,7 +295,50 @@ def load_pipeline(model_name, use_vllm ,use_bnb_nf4, index_path = INDEX_PATH, me
     return retriever, sampler, drafter
 
 
-# In[ ]:
+# In[7]:
+
+
+def score_draft_outputs(results):
+    '''
+    Score the drafting stage output.
+    Arg:= results : list[VerifierInput]
+
+    Computes draft coverage — the fraction of questions where at least one
+    draft contains a gold answer.
+    Uses preprocess.answer_in_response()
+    '''
+    pr = PipelineResult()
+    pr.total_questions = len(results)
+
+    retrieval_ms_list = []
+    sampling_ms_list  = []
+    drafting_ms_list  = []
+
+    for vi in results:
+        pr.total_drafts += len(vi.drafts)
+
+        # check if any draft contains a gold answer
+        any_hit = any(
+            answer_in_response(vi.gold_answers, d.answer_draft) 
+            for d in vi.drafts
+        )
+
+        if any_hit: pr.draft_hits += 
+
+        retrieval_ms_list.append(vi.retrieval_time_s * 1000)
+        sampling_ms_list.append(vi.sampling_time_s  * 1000)
+        drafting_ms_list.append(vi.drafting_time_s * 1000)
+
+    if results:
+        pr.avg_retrieval_ms = sum(retrieval_ms_list) / len(retrieval_ms_list)
+        pr.avg_sampling_ms  = sum(sampling_ms_list) / len(sampling_ms_list)
+        pr.avg_drafting_ms = sum(drafting_ms_list) / len(drafting_ms_list)
+        pr.avg_total_ms = (sum(retrieval_ms_list) + 
+                           sum(sampling_ms_list) + sum(drafting_ms_list))/ (len(retrieval_ms_list) +
+                                                                           len(sampling_ms_list) +
+                                                                           len(drafting_ms_list))
+
+    return pr
 
 
 
@@ -301,10 +347,89 @@ def load_pipeline(model_name, use_vllm ,use_bnb_nf4, index_path = INDEX_PATH, me
 # In[ ]:
 
 
+def save_draft_outputs(results, output_path):
+    '''
+    results : list[VerifierInput]
+    Serialise list[VerifierInput] to JSON
+    '''
+    records = []
+    for vi in results:
+        records.append({
+            "question_id"      : vi.question_id,
+            "question"         : vi.question,
+            "gold_answers"     : vi.gold_answers,
+            "retrieval_time_s" : vi.retrieval_time_s,
+            "sampling_time_s"  : vi.sampling_time_s,
+            "drafting_time_s"  : vi.drafting_time_s,
+            "drafts": [
+                {
+                    "subset_index" : d.subset_index,
+                    "answer_draft" : d.answer_draft,
+                    "rationale"    : d.rationale,
+                    "draft_logprob": d.draft_logprob,
+                }
+                for d in vi.drafts
+            ],
+        })
+
+    output_path.parent.mkdir(parents = True, exist_ok = True)
+    with open(output_path, 'w', encoding = 'utf-8') as f:
+        json.dump(records, f, indent = 2, ensure_ascii = False)
+
+    logger.info("Saved %d drafter outputs → %s", len(records), output_path)
+
 
 
 
 # In[ ]:
+
+
+# Test Run
+
+def run_test(m, k_docs, profile_run, profile_dir, output_path, model_name, use_vllm ,use_bnb_nf4, use_int8,
+             retriever = None, sampler = None, drafter = None, top_k = TOP_K, n_samples = 10):
+    '''
+    Run the drafting pipeline on the first n_samples questions from
+    TriviaQA validation split.
+    Returns:
+    list[VerifierInput]  — one per question,
+    '''
+    logger.info("=== TEST RUN: n=%d questions from TriviaQA validation ===", n_samples)
+
+    if retriever is None or sampler is None or drafter is None:
+        retriever, sampler, drafter = load_pipeline(model_name, use_vllm ,use_bnb_nf4, use_int8)
+    results = []
+
+    for i, sample in enumerate(iter_samples(split="validation")):
+        if i >= n_samples:
+            break
+
+        logger.info("[%d/%d] qid=%s  q=%s", i+1, n_samples,
+                    sample.question_id, sample.question[:60])
+
+        vi = process_one(
+            sample  = sample,
+            retriever = retriever,
+            sampler = sampler,
+            drafter = drafter,
+            top_k  = top_k,
+            m   = m,
+            k_docs      = k_docs,
+            profile_run = profile_run and (i == 0),  # only profile first question
+            profile_dir = profile_dir,
+        )
+        results.append(vi)
+
+    pr = score_draft_outputs(results)
+    save_draft_outputs(results, output_path)
+
+    logger.info('Draft output results saved at %s', output_path)
+
+    return results
+
+
+
+
 
 
 

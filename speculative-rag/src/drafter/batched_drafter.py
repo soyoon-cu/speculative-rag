@@ -22,8 +22,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 logging.basicConfig(level=logging.INFO, format='%(levelname)s | %(message)s')
 logger = logging.getLogger(__name__)
 
-from draft_output import DraftOutput
-from vllm_ import VLLM
+from .draft_output import DraftOutput
+from .vllm_ import VLLM
 
 
 

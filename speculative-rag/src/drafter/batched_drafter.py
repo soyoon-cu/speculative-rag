@@ -1,18 +1,13 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[6]:
-
-
-from draft_output import DraftOutput
-from vllm_ import VLLM
-
-
-# In[ ]:
-
 
 from __future__ import annotations
 
+'''
+Specialist RAG drafter : generates m draft (answer, rationale) pairs from m document subsets
+in a SINGLE batched forward pass
+'''
+
+
+import torch.cuda.nvtx as nvtx
 import logging
 import re
 import time
@@ -27,26 +22,14 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 logging.basicConfig(level=logging.INFO, format='%(levelname)s | %(message)s')
 logger = logging.getLogger(__name__)
 
+from draft_output import DraftOutput
+from vllm_ import VLLM
 
-# In[ ]:
 
 
 MODEL_MISTRAL_7B   = "mistralai/Mistral-7B-v0.1"
 
 
-# In[ ]:
-
-
-
-
-
-# In[ ]:
-
-
-'''
-Specialist RAG drafter : generates m draft (answer, rationale) pairs from m document subsets
-in a SINGLE batched forward pass
-'''
 class BatchedDrafter:
     def __init__(
         self, device,
@@ -59,12 +42,12 @@ class BatchedDrafter:
         TEMPERATURE,
         model_name = None
     ):
-
+        
         self.device = device
         self.DO_SAMPLE = DO_SAMPLE
         self.TEMPERATURE = TEMPERATURE
         self.use_int8 = use_int8
-
+        
         self.is_cuda = device.type == 'cuda'
         self.is_mps = device.type == 'mps'
         self.is_cpu = device.type == 'cpu'
@@ -88,6 +71,7 @@ class BatchedDrafter:
             self.device, model_name, self.use_vllm, self.use_bnb_nf4
         )
         if self.use_vllm:
+            logger.info('Using vLLM...')
             self._vllm = VLLM()
             self.vllm_llm, self.vllm_sampling = self._vllm.load_vllm(model_name,max_new_tokens, 
                                                                      max_input_len, TEMPERATURE)
@@ -117,13 +101,13 @@ class BatchedDrafter:
         if self.tokenizer.pad_token_id is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
-
-
+            
+    
         model_kwargs = {
             'torch_dtype':dtype,
             'device_map' : 'auto' if self.is_cuda else None,
         }
-
+    
         # NF4 quantization (L4)
         if self.use_bnb_nf4:
             from transformers import BitsAndBytesConfig
@@ -135,22 +119,23 @@ class BatchedDrafter:
             )
             model_kwargs['quantization_config'] = bnb_cfg
             model_kwargs.pop('torch_dtype') # BnB own dtype
-
+    
             logger.info('NF4 4-bit quantization enabled via bitsandbytes')
-
+    
         if self.is_cuda and self.use_int8 and not self.use_bnb_nf4:
             model_kwargs['load_in_8bit'] = True 
+            
             logger.info('INT8 quantization enabled via bitsandbytes')
-
+    
         logger.info("Loading %s  dtype=%s  device=%s …", model_name, dtype, self.device)
-        t0=sync_time()
-
+        t0=self.sync_time()
+    
         self.model = AutoModelForCausalLM.from_pretrained(model_name, **model_kwargs)
 
         if not self.is_cuda:
             self.model = self.model.to(self.device)
         self.model.eval()
-        t1 = sync_time()
+        t1 = self.sync_time()
         logger.info("Model ready in %.2f s", t1 - t0)
 
 
@@ -195,9 +180,9 @@ class BatchedDrafter:
         gen_ids = gen_out.sequences[:, input_len:]
         # per-draft log_probs
         # gen_out.scores -> tuple of len = gen_len, each tensor (m, vocab_size)
-
+        
         logprobs_batch = DraftOutput.compute_seq_logprob(gen_out.scores, gen_ids) # (m, )
-
+        
         # Decode
         completions = self.tokenizer.batch_decode(
             gen_ids,
@@ -248,7 +233,9 @@ class BatchedDrafter:
 
 
         if self.use_vllm:
-            raw_outputs = self._vllm.generate_vllm(prompts, self.vllm_llm, self.vllm_sampling)
+            if profile_run : nvtx.range_push(f"drafter.vllm_generate  m={m}")
+            raw_outputs = self._vllm.generate_vllm(prompts, self.vllm_llm, self.vllm_sampling, profile_run)
+            if profile_run : nvtx.range_pop()
         elif profile_run:
             raw_outputs = self.generate_with_profiler(prompts, profile_dir)
         else:
@@ -273,22 +260,18 @@ class BatchedDrafter:
         '''
         Outputs
         -TensorBoard trace events
-        -Chrome JSON trace
         '''
         Path(profile_dir).mkdir(parents = True, exist_ok = True)
-        chrome_trace = str(Path(profile_dir) / 'drafter_trace.json')
+        
         activities = [ProfilerActivity.CPU]
         if self.is_cuda:
             activities.append(ProfilerActivity.CUDA)
-
+    
         if self.is_mps and hasattr(ProfilerActivity, 'MPS'):
             activities.append(ProfilerActivity.MPS)
-
-        logger.info(
-                "Profiling with activities=%s → trace: %s",
-                [a.name for a in activities], chrome_trace,
-            )
-
+    
+        logger.info("Profiling → TensorBoard events: %s", profile_dir)
+    
         with profile(
             activities = activities,
             record_shapes = True,
@@ -300,11 +283,8 @@ class BatchedDrafter:
             with record_function('batched_drafter.generate'):
                 result = self.generate_transformers(prompts)
             prof.step()
-
-        # Chrome trace
-        prof.export_chrome_trace(chrome_trace)
-        logger.info("Chrome trace → %s", chrome_trace)
-
+    
+        
         # Summary table sorted by CPU time
         print("\n" + "─" * 70)
         print(f"  Profiler summary  ({len(prompts)} prompts, device={self.device})")
@@ -315,14 +295,6 @@ class BatchedDrafter:
                 row_limit= 15,
             )
         )
-
+    
         return result
-
-
-
-
-# In[ ]:
-
-
-
 

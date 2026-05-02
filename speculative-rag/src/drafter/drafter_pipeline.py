@@ -41,12 +41,12 @@ logger = logging.getLogger(__name__)
 
 
 
-from sampling.index import FAISSIndex
-from sampling.retriever   import ContrieverRetriever
-from sampling.multi_perspective import MultiPerspectiveSampler
-from batched_drafter  import BatchedDrafter, DraftOutput, VLLM
-from data.loader import iter_samples, TriviaQASample
-from data.preprocess import answer_in_response
+from ..sampling.index import FAISSIndex
+from ..sampling.retriever   import ContrieverRetriever
+from ..sampling.multi_perspective import MultiPerspectiveSampler
+from .batched_drafter  import BatchedDrafter, DraftOutput, VLLM
+from ..data.loader import iter_samples, TriviaQASample
+from ..data.preprocess import answer_in_response
 
 
 

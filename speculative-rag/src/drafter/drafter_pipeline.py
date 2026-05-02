@@ -1,14 +1,5 @@
-#!/usr/bin/env python
-# coding: utf-8
 
-# In[6]:
-
-
-
-
-
-# In[ ]:
-
+from __future__ import annotations
 
 '''
 Full Speculative RAG drafting pipeline.
@@ -32,12 +23,9 @@ list[VerifierInput], one per question, contains
 '''
 
 
-# In[ ]:
 
-
-from __future__ import annotations
-
-import logging
+import torch.cuda.nvtx as nvtx
+import logging, json
 import re
 import time
 from dataclasses import dataclass, field
@@ -52,49 +40,14 @@ logging.basicConfig(level=logging.INFO, format='%(levelname)s | %(message)s')
 logger = logging.getLogger(__name__)
 
 
-# In[ ]:
 
+from sampling.index import FAISSIndex
+from sampling.retriever   import ContrieverRetriever
+from sampling.multi_perspective import MultiPerspectiveSampler
+from batched_drafter  import BatchedDrafter, DraftOutput, VLLM
+from data.loader import iter_samples, TriviaQASample
+from data.preprocess import answer_in_response
 
-from index import FAISSIndex
-from retriever   import ContrieverRetriever
-from multi_perspective import MultiPerspectiveSampler
-from batched_drafter  import BatchedDrafter, DraftOutput
-from loader import iter_samples, TriviaQASample
-from preprocess import answer_in_response
-
-
-# In[ ]:
-
-
-# (L4/A100)
-# VLLM_AVAILABLE = True
-
-# A100 quantization
-# INT8_Q = True
-
-# L4 quantization
-# BNB_AVAILABLE = True
-# from transformers import BitsAndBytesConfig
-
-# mps
-VLLM_AVAILABLE = False
-BNB_AVAILABLE = False
-INT8_Q = False
-
-
-# Model names
-MODEL_MISTRAL_7B        = "mistralai/Mistral-7B-v0.1"
-MODEL_MISTRAL_INSTRUCT  = "mistralai/Mistral-7B-Instruct-v0.1"
-
-# mps
-MODEL_PHI2   = "microsoft/phi-2"           
-MODEL_TINYLLAMA = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"  
-
-# hyperparamters
-
-
-PROFILE_RUN = False
-PROFILE_BASE_DIR = './profiler_traces'
 
 
 if torch.cuda.is_available():
@@ -106,14 +59,9 @@ else:
     DEVICE = torch.device('cpu')
 
 
-# In[ ]:
-
 
 INDEX_PATH = Path("data/index.faiss")
 META_PATH  = Path("data/index_meta.pkl")
-
-
-# In[ ]:
 
 
 # Speculative RAG hyperparameters
@@ -123,8 +71,6 @@ DO_SAMPLE      = False
 TEMPERATURE    = 1.0  # greedy decoding
 TOP_K = 10
 
-
-# In[ ]:
 
 
 @dataclass
@@ -151,11 +97,7 @@ class VerifierInput:
     retrieval_time_s : float = 0.0
     sampling_time_s : float = 0.0
     drafting_time_s : float = 0.0
-
-
-
-# In[ ]:
-
+    
 
 @dataclass
 class PipelineResult:
@@ -177,20 +119,13 @@ class PipelineResult:
         'Fraction of questions where at least one draft is correct.'
         if self.total_questions == 0: return 0.0
         return self.drafts_hit / self.total_questions
-
-
-
-# In[ ]:
-
-
+ 
 def sync_time():
     'Synchronizes GPU'
     if torch.cuda.is_available():
         torch.cuda.synchronize()
     return time.perf_counter()
 
-
-# In[ ]:
 
 
 def process_one(
@@ -203,9 +138,11 @@ def process_one(
     gold_answers = sample.answers
 
     # Stage 1 - Retrieve top-k passages + precomputed embeddings
+    if profile_run :  nvtx.range_push(f"pipeline.retrieve  qid={question_id}")
     t0 = sync_time()
     texts, embs = retriever.retrieve_with_embeddings(question, top_k)
     retrieval_time = sync_time() - t0
+    if profile_run : nvtx.range_pop()
     if not texts:
         logger.warning('No passages retrieved for qid = %s- skipping', question_id)
         return VerifierInput(
@@ -219,6 +156,7 @@ def process_one(
     # Stage 2 -Multi-perspective subset sampling
     # precomputed_emb bypasses Contriever re-encoding (use FAISS cached vectors)
     # kmeans runs on top-k already computed vectors
+    if profile_run : nvtx.range_push(f"pipeline.sample  m={m}  k={k_docs}")
     t0 = sync_time()
     subsets = sampler.generate_subsets(
         question = question,
@@ -228,6 +166,8 @@ def process_one(
         precomputed_emb = embs,
     )
     sampling_time = sync_time() - t0
+    if profile_run :nvtx.range_pop()
+        
     if not subsets:
         logger.warning("No subsets generated for qid=%s — skipping.", question_id)
         return VerifierInput(
@@ -241,15 +181,17 @@ def process_one(
 
     # Stage 3 - Batched parallel draft generation
     # All m prompts go through model in ONE batched generate() call
+    if profile_run :  nvtx.range_push(f"pipeline.draft  m={m}")
     t0 = sync_time()
     drafts = drafter.generate_drafts(
         question = question,
         subsets = subsets,
         profile_run=profile_run,
         profile_dir = profile_dir)
-
+    
     drafting_time = sync_time()-t0
-
+    if profile_run :  nvtx.range_pop()
+    
     return VerifierInput(
         question_id  = question_id,
         question = question,
@@ -261,16 +203,9 @@ def process_one(
     )
 
 
-
-
-
-
-# In[ ]:
-
-
-def load_pipeline(model_name, use_vllm ,use_bnb_nf4, index_path = INDEX_PATH, meta_path = META_PATH):
+def load_pipeline(model_name, use_vllm ,use_bnb_nf4, use_int8, index_path = INDEX_PATH, meta_path = META_PATH):
     'Load all three pipelinecomponents once'
-
+    
     logger.info("Loading FAISS index from %s …", index_path)
     faiss_index = FAISSIndex.load(index_path, meta_path)
 
@@ -280,22 +215,19 @@ def load_pipeline(model_name, use_vllm ,use_bnb_nf4, index_path = INDEX_PATH, me
     logger.info("Loading MultiPerspectiveSampler …")
     sampler = MultiPerspectiveSampler(device=str(DEVICE))
 
-    logger.info("Loading BatchedDrafter (%s) …", MODEL_NAME)
+    logger.info("Loading BatchedDrafter (%s) …", model_name)
     drafter = BatchedDrafter(
         device = DEVICE,
         max_new_tokens = MAX_NEW_TOKENS,
         max_input_len  = MAX_INPUT_LEN,
-        use_vllm ,
-        use_bnb_nf4,
-        use_int8,
+        use_vllm = use_vllm ,
+        use_bnb_nf4 = use_bnb_nf4,
+        use_int8 = use_int8,
         DO_SAMPLE  = DO_SAMPLE,
         TEMPERATURE  = TEMPERATURE,
-        model_name,
+        model_name = model_name,
     )
     return retriever, sampler, drafter
-
-
-# In[7]:
 
 
 def score_draft_outputs(results):
@@ -323,7 +255,7 @@ def score_draft_outputs(results):
             for d in vi.drafts
         )
 
-        if any_hit: pr.draft_hits += 
+        if any_hit: pr.drafts_hit += 1
 
         retrieval_ms_list.append(vi.retrieval_time_s * 1000)
         sampling_ms_list.append(vi.sampling_time_s  * 1000)
@@ -333,19 +265,12 @@ def score_draft_outputs(results):
         pr.avg_retrieval_ms = sum(retrieval_ms_list) / len(retrieval_ms_list)
         pr.avg_sampling_ms  = sum(sampling_ms_list) / len(sampling_ms_list)
         pr.avg_drafting_ms = sum(drafting_ms_list) / len(drafting_ms_list)
-        pr.avg_total_ms = (sum(retrieval_ms_list) + 
-                           sum(sampling_ms_list) + sum(drafting_ms_list))/ (len(retrieval_ms_list) +
-                                                                           len(sampling_ms_list) +
-                                                                           len(drafting_ms_list))
+        pr.avg_total_ms = (pr.avg_retrieval_ms +
+                   pr.avg_sampling_ms  +
+                   pr.avg_drafting_ms)
 
     return pr
-
-
-
-
-
-# In[ ]:
-
+        
 
 def save_draft_outputs(results, output_path):
     '''
@@ -377,35 +302,33 @@ def save_draft_outputs(results, output_path):
         json.dump(records, f, indent = 2, ensure_ascii = False)
 
     logger.info("Saved %d drafter outputs → %s", len(records), output_path)
+        
 
-
-
-
-# In[ ]:
-
-
-# Test Run
-
-def run_test(m, k_docs, profile_run, profile_dir, output_path, model_name, use_vllm ,use_bnb_nf4, use_int8,
-             retriever = None, sampler = None, drafter = None, top_k = TOP_K, n_samples = 10):
+def run(m, k_docs, profile_run, output_path, model_name, use_vllm ,use_bnb_nf4, use_int8, profile_dir = None,
+             log_every = 100, retriever = None, sampler = None, drafter = None, top_k = TOP_K, 
+            n_samples = 1000, test = True):
     '''
-    Run the drafting pipeline on the first n_samples questions from
-    TriviaQA validation split.
+    Run the drafting pipeline on TriviaQA validation split.
+    If test = True : pipeline runs on first n_samples questions, else on complete  TriviaQA split
+    Progress logging every log_every questions
     Returns:
-    list[VerifierInput]  — one per question,
+    list[VerifierInput]  — one per question
     '''
-    logger.info("=== TEST RUN: n=%d questions from TriviaQA validation ===", n_samples)
+    if test: logger.info("=== TEST RUN: n=%d questions from TriviaQA validation ===", n_samples)
 
     if retriever is None or sampler is None or drafter is None:
         retriever, sampler, drafter = load_pipeline(model_name, use_vllm ,use_bnb_nf4, use_int8)
     results = []
+    
+    n_processed = 0
 
     for i, sample in enumerate(iter_samples(split="validation")):
-        if i >= n_samples:
-            break
-
-        logger.info("[%d/%d] qid=%s  q=%s", i+1, n_samples,
-                    sample.question_id, sample.question[:60])
+        if test:
+            if i >= n_samples:
+                break
+    
+            logger.info("[%d/%d] qid=%s  q=%s", i+1, n_samples,
+                        sample.question_id, sample.question[:60])
 
         vi = process_one(
             sample  = sample,
@@ -419,30 +342,19 @@ def run_test(m, k_docs, profile_run, profile_dir, output_path, model_name, use_v
             profile_dir = profile_dir,
         )
         results.append(vi)
+        n_processed += 1
+
+        # Progress logging
+        if n_processed % log_every ==0:
+            progress = score_draft_outputs(results)
+            logger.info('Processed %d | draft coverage so far %.2f%%',
+                       n_processed, progress.draft_coverage * 100)
+            
 
     pr = score_draft_outputs(results)
+    # Saving the draft output results
     save_draft_outputs(results, output_path)
 
     logger.info('Draft output results saved at %s', output_path)
 
     return results
-
-
-
-
-
-
-
-
-
-# In[ ]:
-
-
-
-
-
-# In[ ]:
-
-
-
-

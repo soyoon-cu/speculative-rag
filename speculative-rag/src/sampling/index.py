@@ -17,7 +17,7 @@ from transformers import AutoModel, AutoTokenizer
 logger = logging.getLogger(__name__)
 
 _CONTRIEVER_MODEL = "facebook/contriever-msmarco"
-_PASSAGE_BATCH = 256
+_PASSAGE_BATCH = 512
 _DIM = 768
 
 
@@ -88,17 +88,26 @@ class FAISSIndex:
         self._titles = titles
 
     def search(self, query_emb: np.ndarray, top_k: int) -> list[str]:
-        """Return top-k passage texts for a single (1, D) query embedding."""
+        """Return top-k passage texts and their FAISS indices for a single (1, D) query embedding."""
         q = np.ascontiguousarray(query_emb, dtype=np.float32)
         distances, indices = self._index.search(q, top_k)
         passages: list[str] = []
+        valid_indices = []
         for idx in indices[0]:
             if idx == -1:
                 continue
             title = self._titles[idx]
             text = self._texts[idx]
             passages.append(f"{title}\n{text}" if title else text)
-        return passages
+            valid_indices.append(int(idx))
+        return passages, valid_indices
+
+    def get_vectors(self, indices):
+        'Retrieve stored passage embeddings from FAISS index at specified indices'
+        pointer = self._index.get_xb()
+        size = self._index.ntotal * self._index.d
+        all_vectors = faiss.rev_swig_ptr(pointer, size).reshape(self._index.ntotal, self._index.d)
+        return all_vectors[indices].copy()
 
     def save(self, index_path: str | Path, meta_path: str | Path) -> None:
         faiss.write_index(self._index, str(index_path))

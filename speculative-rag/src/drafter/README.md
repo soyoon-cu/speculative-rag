@@ -25,11 +25,18 @@ For each TriviaQA question the system retrieves top-k passages via a pre-built F
 
 ```
 .
-├── draft_output.py          # DraftOutput dataclass — prompt builder, parser, log-prob
-├── vllm_.py                 # VLLM wrapper — loads vLLM engine, continuous-batch generate
-├── batched_drafter.py       # BatchedDrafter — HuggingFace + quantisation + PyTorch Profiler
-├── drafter_pipeline.py      # Full pipeline — FAISS retrieval → sampling → drafting → JSON
-├── run_tests.py             # CLI entry-point with all named experiment functions
+├── drafter/
+│   ├── draft_output.py          # DraftOutput dataclass — prompt builder, parser, log-prob
+│   ├── vllm_.py                 # VLLM wrapper — loads vLLM engine, continuous-batch generate
+│   ├── batched_drafter.py       # BatchedDrafter — HuggingFace + quantisation + PyTorch Profiler
+│   ├── drafter_pipeline.py      # Full pipeline — FAISS retrieval → sampling → drafting → JSON
+│   ├── run_tests.py             # CLI entry-point with all named experiment functions
+│   ├── profiler_traces/         # Auto-created — PyTorch TensorBoard events
+│   ├── nsys_traces/             # Create manually before nsys runs (see §8)
+│   └── drafter_output/          # Auto-created — per-experiment JSON results
+│   ├── data/
+│       ├── index.faiss          # ← precomputed FAISS index  
+│       └── index_meta.pkl       # ← passage metadata / text  
 ├── sampling/
 │   ├── index.py             # FAISSIndex — load precomputed passage index
 │   ├── retriever.py         # ContrieverRetriever — dense retrieval over FAISS
@@ -37,11 +44,8 @@ For each TriviaQA question the system retrieves top-k passages via a pre-built F
 ├── data/
 │   ├── loader.py            # iter_samples(), TriviaQASample
 │   ├── preprocess.py        # answer_in_response() — EM scoring helper
-│   ├── index.faiss          # ← precomputed FAISS index  (you provide)
-│   └── index_meta.pkl       # ← passage metadata / text  (you provide)
-├── profiler_traces/         # Auto-created — PyTorch TensorBoard events
-├── nsys_traces/             # Create manually before nsys runs (see §8)
-└── drafter_output/          # Auto-created — per-experiment JSON results
+ 
+
 ```
 
 ---

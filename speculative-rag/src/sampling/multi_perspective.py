@@ -49,17 +49,27 @@ class MultiPerspectiveSampler:
         # Normalize and move to CPU for KMeans
         return torch.nn.functional.normalize(embeddings, p=2, dim=-1).cpu().numpy()
 
-    def generate_subsets(self, question, passages, m=5, k=2):
+    def generate_subsets(self, question, passages, m=5, k=2, precomputed_emb = None):
         """
         Strict implementation of Algorithm 1.
         m: total drafts to generate.
         k: documents per subset.
+        precomputed_embs : receive embeddings from FAISS index(no re-encoding)
         """
         if not passages:
             return [[] for _ in range(m)]
+        # use precomputed embs
+        if precomputed_emb is not None:
+            assert len(precomputed_emb) == len(passages), (
+                f'precomputed_embeddings length {len(precomputed_emb)} '
+                f'must match passages length {len(passages)}'
+            )
+            embeddings = precomputed_emb
+        else:
+            embeddings = self._get_embeddings(question, passages)
 
         # Line 2: Cluster documents into k groups 
-        embeddings = self._get_embeddings(question, passages)
+        
         n_clusters = min(k, len(passages))
         
         # n_init="auto" is the standard for modern scikit-learn

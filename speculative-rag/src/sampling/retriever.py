@@ -5,8 +5,6 @@ from __future__ import annotations
 import torch
 from transformers import AutoModel, AutoTokenizer
 
-# FIX: Changed from 'rag.retrieval.index' to relative import
-from .index import FAISSIndex
 
 _CONTRIEVER_MODEL = "facebook/contriever-msmarco"
 
@@ -61,6 +59,13 @@ class ContrieverRetriever:
     def retrieve(self, query: str, top_k: int = 10) -> list[str]:
         """Convenience method for a single query (used in pipeline.py)."""
         return self.retrieve_batch([query], top_k=top_k)[0]
+
+    def retrieve_with_embeddings(self,query,top_k = 10):
+        'Returns passage texts and pecomputed FAISS embeddings'
+        q_emb = self._encode([query]).numpy()
+        texts, faiss_indices = self.index.search(q_emb, top_k=top_k)
+        embs = self.index.get_vectors(faiss_indices)
+        return texts, embs
 
     def retrieve_batch(self, queries: list[str], top_k: int = 10) -> list[list[str]]:
         """Return top-k passage texts for each query in a batch."""

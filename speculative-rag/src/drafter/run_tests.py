@@ -12,7 +12,7 @@ logging.basicConfig(level=logging.INFO, format='%(levelname)s | %(message)s')
 logger = logging.getLogger(__name__)
 
 
-from drafter_pipeline import run
+from .drafter_pipeline import run
 
 
 # no optimization(default)

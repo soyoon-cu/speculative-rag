@@ -60,6 +60,8 @@ class VLLM:
             if req_out.outputs[0].logprobs:
                 for tok_lp_dict in req_out.outputs[0].logprobs:
                     lp += list(tok_lp_dict.values())[0].logprob
+            n_in  = len(req_out.prompt_token_ids)     #  prompt tokens
+            n_out = len(req_out.outputs[0].token_ids)      #  generated tokens
             results.append((completion, lp))
         if profile_run : nvtx.range_pop()
         return results

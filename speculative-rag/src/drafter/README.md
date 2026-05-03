@@ -542,8 +542,8 @@ All results are written to `./drafter_output/` (auto-created on first run):
       "draft_logprob": -3.142
     }
   ],
-drafts_tokens_in  : 4000,   
-drafts_tokens_out  : 500  
+"drafts_tokens_in"  : 4000,   
+"drafts_tokens_out"  : 500  
 }
 ```
 

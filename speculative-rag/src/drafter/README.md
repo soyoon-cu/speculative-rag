@@ -541,7 +541,9 @@ All results are written to `./drafter_output/` (auto-created on first run):
       "rationale":     "Evidence [1] states the 1998 World Cup was held in France.",
       "draft_logprob": -3.142
     }
-  ]
+  ],
+drafts_tokens_in  : int   
+drafts_tokens_out  : int  
 }
 ```
 
@@ -559,6 +561,8 @@ All results are written to `./drafter_output/` (auto-created on first run):
 | `drafts[].answer_draft` | `DraftOutput.parse_draft_output` | Extracted answer α_j from model output |
 | `drafts[].rationale` | `DraftOutput.parse_draft_output` | Extracted rationale β_j from model output |
 | `drafts[].draft_logprob` | `DraftOutput.compute_seq_logprob` | Log P(β_j, α_j \| Q, docs) — sum of per-token log-probs |
+| `drafts_tokens_in` | total prompt tokens across all m drafts |
+| `drafts_tokens_out` | total generated tokens across all m drafts |
 
 ### How the data feeds the verifier
 

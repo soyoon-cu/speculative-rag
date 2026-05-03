@@ -35,6 +35,8 @@ class DraftOutput:
     rationale : str
     draft_logprob : float
     raw_model_output : str = field(repr = False, default = '')
+    tokens_in : int = 0
+    tokens_out : int = 0
 
    
     # Prompt construction 

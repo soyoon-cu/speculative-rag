@@ -161,7 +161,7 @@ class BatchedDrafter:
         input_ids = enc['input_ids'].to(self.device)
         attention_mask = enc['attention_mask'].to(self.device)
 
-        input_len = input_ids.size(1)
+        input_len = input_ids.size(1) #  padded prompt length, same for all m
 
         # Batched generation
 
@@ -177,7 +177,7 @@ class BatchedDrafter:
             return_dict_in_generate = True,
         )
 
-        gen_ids = gen_out.sequences[:, input_len:]
+        gen_ids = gen_out.sequences[:, input_len:] # (m, max_gen_len)
         # per-draft log_probs
         # gen_out.scores -> tuple of len = gen_len, each tensor (m, vocab_size)
         
@@ -189,7 +189,16 @@ class BatchedDrafter:
             skip_special_tokens = True,
             clean_up_tokenization_spaces = True,
         )
-        return list(zip(completions, logprobs_batch.cpu().tolist()))
+        output_len_per_draft = (
+            gen_ids != self.tokenizer.pad_token_id
+        ).sum(dim=1).cpu().tolist()                  # list of length m -> each entry - actual generated tokens per draft
+
+        return list(zip(
+            completions,
+            logprobs_batch.cpu().tolist(),
+            [input_len] * len(completions),
+            output_len_per_draft,
+        ))
 
 
     def generate_drafts(self,question,subsets,profile_run=False, profile_dir = '/profiler_traces'):

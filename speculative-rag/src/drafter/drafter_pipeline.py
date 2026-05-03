@@ -97,6 +97,8 @@ class VerifierInput:
     retrieval_time_s : float = 0.0
     sampling_time_s : float = 0.0
     drafting_time_s : float = 0.0
+    drafts_tokens_in  : int   = 0   # total prompt tokens across all m drafts
+    drafts_tokens_out  : int   = 0   # total generated tokens across all m drafts
     
 
 @dataclass
@@ -200,6 +202,8 @@ def process_one(
         retrieval_time_s = retrieval_time,
         sampling_time_s  = sampling_time,
         drafting_time_s  = drafting_time,
+        drafts_tokens_in  = sum(d.tokens_in  for d in drafts),
+        drafts_tokens_out = sum(d.tokens_out for d in drafts),
     )
 
 
@@ -295,6 +299,8 @@ def save_draft_outputs(results, output_path):
                 }
                 for d in vi.drafts
             ],
+            "drafts_tokens_in" : vi.drafts_tokens_in,
+            "drafts_tokens_out" : vi.drafts_tokens_out,
         })
 
     output_path.parent.mkdir(parents = True, exist_ok = True)

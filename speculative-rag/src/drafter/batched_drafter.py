@@ -243,7 +243,7 @@ class BatchedDrafter:
 
         # Parse 
         drafts = []
-        for subset_idx, (completion, logprob) in zip(indices, raw_outputs):
+        for subset_idx, (completion, logprob, tok_in, tok_out) in zip(indices, raw_outputs):
             rationale, answer_draft = DraftOutput.parse_draft_output(completion)
             drafts.append(DraftOutput(
                 subset_index = subset_idx,
@@ -251,6 +251,8 @@ class BatchedDrafter:
                 rationale = rationale,
                 draft_logprob = logprob,
                 raw_model_output = completion,
+                tokens_in  = tok_in,
+                tokens_out    = tok_out,
             ))
 
         logger.info("Drafting complete — %d/%d drafts produced.", len(drafts), m)

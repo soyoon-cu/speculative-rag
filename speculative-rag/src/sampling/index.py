@@ -7,12 +7,17 @@ import logging
 import pickle
 from pathlib import Path
 
+import os
+import shutil
+import subprocess
 import faiss
 import numpy as np
 import torch
 import typer
 from tqdm import tqdm
 from transformers import AutoModel, AutoTokenizer
+
+from datasets import load_from_disk
 
 logger = logging.getLogger(__name__)
 
@@ -78,16 +83,17 @@ def embed_passages(
         all_embs.append(embs.cpu().float().numpy())
     return np.vstack(all_embs)
 
-
 class FAISSIndex:
     """Wraps a flat FAISS index (inner-product) with passage text lookup."""
 
-    def __init__(self, index: faiss.Index, texts: list[str], titles: list[str]) -> None:
+    # Added meta_data=None and made texts/titles optional to prevent crashing
+    def __init__(self, index: faiss.Index, texts: list[str] = None, titles: list[str] = None, meta_data = None) -> None:
         self._index = index
         self._texts = texts
         self._titles = titles
+        self._meta_data = meta_data
 
-    def search(self, query_emb: np.ndarray, top_k: int) -> list[str]:
+    def search(self, query_emb: np.ndarray, top_k: int) -> tuple[list[str], list[int]]:
         """Return top-k passage texts and their FAISS indices for a single (1, D) query embedding."""
         q = np.ascontiguousarray(query_emb, dtype=np.float32)
         distances, indices = self._index.search(q, top_k)
@@ -96,8 +102,19 @@ class FAISSIndex:
         for idx in indices[0]:
             if idx == -1:
                 continue
-            title = self._titles[idx]
-            text = self._texts[idx]
+            
+            # --- THE NEW ARROW LOGIC ---
+            # If we are using the disk-backed Arrow dataset:
+            if self._meta_data is not None:
+                row = self._meta_data[int(idx)]
+                title = row["title"]
+                text = row["text"]
+            # Fallback for the old list method (useful if you ever run build_index again)
+            else:
+                title = self._titles[idx]
+                text = self._texts[idx]
+            # ---------------------------
+                
             passages.append(f"{title}\n{text}" if title else text)
             valid_indices.append(int(idx))
         return passages, valid_indices
@@ -116,12 +133,89 @@ class FAISSIndex:
         logger.info("Saved FAISS index → %s  metadata → %s", index_path, meta_path)
 
     @classmethod
-    def load(cls, index_path: str | Path, meta_path: str | Path) -> FAISSIndex:
-        index = faiss.read_index(str(index_path))
-        with open(meta_path, "rb") as fh:
-            meta = pickle.load(fh)
-        logger.info("Loaded FAISS index with %d vectors from %s", index.ntotal, index_path)
-        return cls(index, meta["texts"], meta["titles"])
+    def load(cls, index_path: str | Path, meta_path: str | Path) -> 'FAISSIndex':
+        local_index_path = "./local_faiss.index"
+        
+        if not os.path.exists(local_index_path):
+            logger.info("Downloading 64GB index directly from GCS (bypassing FUSE)...")
+            
+            # Convert the FUSE path (/gcs/bucket/...) to a native URI (gs://bucket/...)
+            gcs_uri = str(index_path).replace("/gcs/", "gs://")
+            
+            # Call the native GCP downloader to safely stream it to disk
+            try:
+                subprocess.run(["gcloud", "storage", "cp", gcs_uri, local_index_path], check=True)
+            except FileNotFoundError:
+                # Fallback just in case the container uses the older gsutil CLI
+                subprocess.run(["gsutil", "cp", gcs_uri, local_index_path], check=True)
+                
+            logger.info("Direct download complete!")
+
+        # 2. Load with MMAP from the local disk (0 GB RAM usage)
+        logger.info("Memory-mapping FAISS index from local disk...")
+        index = faiss.read_index(local_index_path)
+        
+        # 3. Load the disk-backed Arrow dataset (FUSE handles this perfectly since it's chunked)
+        logger.info("Loading Arrow dataset...")
+        meta_data = load_from_disk(str(meta_path))
+        
+        return cls(index=index, meta_data=meta_data)
+    
+    # @classmethod
+    # def load(cls, index_path: str | Path, meta_path: str | Path) -> FAISSIndex:
+    #     index = faiss.read_index(str(index_path))
+        
+    #     # Load the disk-backed Arrow dataset (uses almost 0 RAM)
+    #     meta_data = load_from_disk(str(meta_path))
+        
+    #     return cls(index=index, meta_data=meta_data)
+# class FAISSIndex:
+#     """Wraps a flat FAISS index (inner-product) with passage text lookup."""
+
+#     def __init__(self, index: faiss.Index, texts: list[str], titles: list[str]) -> None:
+#         self._index = index
+#         self._texts = texts
+#         self._titles = titles
+
+#     def search(self, query_emb: np.ndarray, top_k: int) -> list[str]:
+#         """Return top-k passage texts and their FAISS indices for a single (1, D) query embedding."""
+#         q = np.ascontiguousarray(query_emb, dtype=np.float32)
+#         distances, indices = self._index.search(q, top_k)
+#         passages: list[str] = []
+#         valid_indices = []
+#         for idx in indices[0]:
+#             if idx == -1:
+#                 continue
+#             title = self._titles[idx]
+#             text = self._texts[idx]
+#             passages.append(f"{title}\n{text}" if title else text)
+#             valid_indices.append(int(idx))
+#         return passages, valid_indices
+
+#     def get_vectors(self, indices):
+#         'Retrieve stored passage embeddings from FAISS index at specified indices'
+#         pointer = self._index.get_xb()
+#         size = self._index.ntotal * self._index.d
+#         all_vectors = faiss.rev_swig_ptr(pointer, size).reshape(self._index.ntotal, self._index.d)
+#         return all_vectors[indices].copy()
+
+#     def save(self, index_path: str | Path, meta_path: str | Path) -> None:
+#         faiss.write_index(self._index, str(index_path))
+#         with open(meta_path, "wb") as fh:
+#             pickle.dump({"texts": self._texts, "titles": self._titles}, fh)
+#         logger.info("Saved FAISS index → %s  metadata → %s", index_path, meta_path)
+
+#     @classmethod
+#     def load(cls, index_path: str | Path, meta_path: str | Path) -> FAISSIndex:
+#         index = faiss.read_index(str(index_path), faiss.IO_FLAG_MMAP)
+#         # with open(meta_path, "rb") as fh:
+#         #     meta = pickle.load(fh)
+
+#         #  Load the disk-backed Arrow dataset (uses almost 0 RAM)
+#         meta_data = load_from_disk(str(meta_path))
+#         # logger.info("Loaded FAISS index with %d vectors from %s", index.ntotal, index_path)
+#         # return cls(index, meta["texts"], meta["titles"])
+#         return cls(index=index, meta_data=meta_data)
 
 
 def build_index(

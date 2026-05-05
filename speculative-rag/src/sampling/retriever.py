@@ -34,7 +34,7 @@ class ContrieverRetriever:
 
         print(f"Initializing ContrieverRetriever on {self.device}")
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModel.from_pretrained(model_name, use_safetensors=True).to(self.device)
+        self.model = AutoModel.from_pretrained(model_name).to(self.device)
         self.model.eval()
 
     @torch.inference_mode()

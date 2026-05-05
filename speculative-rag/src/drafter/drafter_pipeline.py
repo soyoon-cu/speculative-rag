@@ -1,5 +1,6 @@
 
 from __future__ import annotations
+import os
 
 '''
 Full Speculative RAG drafting pipeline.
@@ -41,12 +42,12 @@ logger = logging.getLogger(__name__)
 
 
 
-from ..sampling.index import FAISSIndex
-from ..sampling.retriever   import ContrieverRetriever
-from ..sampling.multi_perspective import MultiPerspectiveSampler
+from sampling.index import FAISSIndex
+from sampling.retriever   import ContrieverRetriever
+from sampling.multi_perspective import MultiPerspectiveSampler
 from .batched_drafter  import BatchedDrafter, DraftOutput, VLLM
-from ..data.loader import iter_samples, TriviaQASample
-from ..data.preprocess import answer_in_response
+from data.loader import iter_samples, TriviaQASample
+from data.preprocess import answer_in_response
 
 
 
@@ -60,8 +61,10 @@ else:
 
 
 
-INDEX_PATH = Path("data/index.faiss")
-META_PATH  = Path("data/index_meta.pkl")
+# INDEX_PATH = Path("data/index.faiss")
+# META_PATH  = Path("data/index_meta.pkl")
+INDEX_PATH = Path(os.getenv("INDEX_PATH", "data/index.faiss"))
+META_PATH  = Path(os.getenv("PASSAGES_META_PATH", "data/index_meta.pkl"))
 
 
 # Speculative RAG hyperparameters
@@ -97,6 +100,7 @@ class VerifierInput:
     retrieval_time_s : float = 0.0
     sampling_time_s : float = 0.0
     drafting_time_s : float = 0.0
+    subsets : list = field(default_factory=list)
     
 
 @dataclass
@@ -151,6 +155,7 @@ def process_one(
             drafts = [],
             gold_answers = gold_answers,
             retrieval_time_s = retrieval_time,
+            subsets = [],
         )
 
     # Stage 2 -Multi-perspective subset sampling
@@ -177,6 +182,7 @@ def process_one(
             gold_answers = gold_answers,
             retrieval_time_s = retrieval_time,
             sampling_time_s = sampling_time,
+            subsets = [],
         )
 
     # Stage 3 - Batched parallel draft generation
@@ -200,6 +206,7 @@ def process_one(
         retrieval_time_s = retrieval_time,
         sampling_time_s  = sampling_time,
         drafting_time_s  = drafting_time,
+        subsets=subsets,
     )
 
 
@@ -289,6 +296,7 @@ def save_draft_outputs(results, output_path):
             "drafts": [
                 {
                     "subset_index" : d.subset_index,
+                    "documents"    : vi.subsets[d.subset_index],
                     "answer_draft" : d.answer_draft,
                     "rationale"    : d.rationale,
                     "draft_logprob": d.draft_logprob,

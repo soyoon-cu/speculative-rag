@@ -1,0 +1,15 @@
+.git
+.gcloudignore
+__pycache__/
+*.pyc
+.venv/
+venv/
+drafter_output/
+drafter_backups/
+
+passages_meta_arrow/
+passages_meta_arrow
+passages_meta.pkl
+*.index
+*.bin
+*.safetensors

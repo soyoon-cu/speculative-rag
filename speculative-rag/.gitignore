@@ -1,0 +1,12 @@
+vertex_config.yaml
+passages_meta.pkl
+passages_meta_arrow/
+drafter_output/
+drafter_backups/
+verifier_output/
+profiler_traces/
+__pycache__/
+*.pyc
+*.index
+*.bin
+*.safetensors

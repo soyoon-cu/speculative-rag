@@ -1,0 +1,18 @@
+steps:
+  # Pull the previous image to use as a cache source (|| true so first build doesn't fail)
+  - name: 'gcr.io/cloud-builders/docker'
+    entrypoint: 'bash'
+    args: ['-c', 'docker pull $_IMAGE_URI || true']
+
+  # Build with --cache-from so unchanged layers (system deps, Python deps) are reused
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - build
+      - --cache-from
+      - $_IMAGE_URI
+      - -t
+      - $_IMAGE_URI
+      - .
+
+images:
+  - $_IMAGE_URI

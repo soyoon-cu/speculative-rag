@@ -36,9 +36,9 @@ ENV PYTHONPATH="/app/src"
 WORKDIR /app/src
 
 # GCS FUSE paths
-ENV INDEX_PATH="/gcs/standard-rag-results-2026/faiss_contriever.index"
-ENV PASSAGES_META_PATH="/gcs/standard-rag-results-2026/passages_meta_arrow"
-ENV RESULTS_PATH="/gcs/speculative-rag-results-2026/verifier_output"
+ENV INDEX_PATH="/gcs/hpml-487304-rag-storage/faiss_contriever.index"
+ENV PASSAGES_META_PATH="/gcs/hpml-487304-rag-storage/passages_meta_arrow"
+ENV RESULTS_PATH="/gcs/hpml-487304-rag-storage/verifier_output"
 
 # Ensure nsys is in the path
 ENV PATH="/opt/nvidia/nsight-systems/bin:${PATH}"

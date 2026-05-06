@@ -43,6 +43,7 @@ DRAFTER_OUTPUT_PATH = Path('./drafter_output')
 M  = 5    # number of drafts per question
 K_DOCS = 2    # documents per subset (subset size)
 TOP_K = 10
+N_SAMPLES = int(os.getenv("N_SAMPLES", "100"))
 
 def run_test():
     '''
@@ -58,7 +59,8 @@ def run_test():
         model_name = MODEL_TINYLLAMA, 
         use_vllm = VLLM_AVAILABLE,
         use_bnb_nf4 = BNB_AVAILABLE, 
-        use_int8 = INT8_Q)
+        use_int8 = INT8_Q,
+        n_samples = N_SAMPLES)
 
 def run_test_profiler():
     '''
@@ -75,7 +77,8 @@ def run_test_profiler():
         use_vllm = VLLM_AVAILABLE,
         use_bnb_nf4 = BNB_AVAILABLE, 
         use_int8 = INT8_Q,
-        profile_dir = PROFILE_BASE_DIR/'test')
+        profile_dir = PROFILE_BASE_DIR/'test',
+        n_samples = N_SAMPLES)
 
 
 def run_no_opt():
@@ -97,7 +100,8 @@ def run_no_opt():
         use_bnb_nf4 = BNB_AVAILABLE, 
         use_int8 = INT8_Q,
         profile_dir = PROFILE_BASE_DIR/'no_opt',
-        test = True)
+        test = True,
+        n_samples = N_SAMPLES)
 
 
 def run_nf4():
@@ -119,7 +123,8 @@ def run_nf4():
         use_bnb_nf4 = True, 
         use_int8 = INT8_Q,
         profile_dir = PROFILE_BASE_DIR/'bnb',
-        test = True
+        test = True,
+        n_samples = N_SAMPLES
         )
 
 
@@ -142,7 +147,8 @@ def run_int8():
         use_bnb_nf4 = BNB_AVAILABLE, 
         use_int8 = True,
         profile_dir = PROFILE_BASE_DIR/'int8',
-        test = True)
+        test = True,
+        n_samples = N_SAMPLES)
 
 
 def run_vllm():
@@ -164,7 +170,8 @@ def run_vllm():
         use_bnb_nf4 = BNB_AVAILABLE, 
         use_int8 = INT8_Q,
         profile_dir = PROFILE_BASE_DIR/'vllm_m5_k2',
-        test = True
+        test = True,
+        n_samples = N_SAMPLES
         )
 
 
@@ -237,7 +244,6 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     RUN_MAP[args.run]()
-
 
 
 

@@ -17,6 +17,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 
 from torch.profiler import profile, record_function, ProfilerActivity
 import contextlib
+from data.preprocess import answer_in_response
 
 console = Console()
 app = typer.Typer(add_completion=False)
@@ -152,7 +153,7 @@ def main(
                 record["drafts"][d_idx]["_beta_bounds"] = (len(tok_prefix) + len(tok_alpha), len(tok_prefix) + len(tok_alpha) + len(tok_beta))
                 record["drafts"][d_idx]["_yes_idx"] = len(full_token_ids) - 1
 
-            # # Save the Verifier token counts into the record before it gets written to JSON
+            # Save the Verifier token counts into the record before it gets written to JSON
             record["verifier_tokens_in"] = verifier_tokens_in
             record["verifier_tokens_out"] = verifier_tokens_out
 
@@ -240,7 +241,7 @@ def main(
             record["selected_draft"] = best_draft["subset_index"]
             
             # Exact Match validation
-            is_correct = any(gold.lower() in best_draft["answer_draft"].lower() for gold in record["gold_answers"])
+            is_correct = answer_in_response(record["gold_answers"], best_draft["answer_draft"])
             record["is_correct"] = is_correct
             if is_correct:
                 correct_count += 1

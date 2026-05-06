@@ -135,30 +135,28 @@ class FAISSIndex:
     @classmethod
     def load(cls, index_path: str | Path, meta_path: str | Path) -> 'FAISSIndex':
         local_index_path = "./local_faiss.index"
-        
-        if not os.path.exists(local_index_path):
-            logger.info("Downloading 64GB index directly from GCS (bypassing FUSE)...")
-            
-            # Convert the FUSE path (/gcs/bucket/...) to a native URI (gs://bucket/...)
-            gcs_uri = str(index_path).replace("/gcs/", "gs://")
-            
-            # Call the native GCP downloader to safely stream it to disk
-            try:
-                subprocess.run(["gcloud", "storage", "cp", gcs_uri, local_index_path], check=True)
-            except FileNotFoundError:
-                # Fallback just in case the container uses the older gsutil CLI
-                subprocess.run(["gsutil", "cp", gcs_uri, local_index_path], check=True)
-                
-            logger.info("Direct download complete!")
 
-        # 2. Load with MMAP from the local disk (0 GB RAM usage)
-        logger.info("Memory-mapping FAISS index from local disk...")
+        if not os.path.exists(local_index_path):
+            index_path_str = str(index_path)
+            if os.path.exists(index_path_str):
+                # Already on local disk (pre-copied by launch script) — skip the redundant 64 GB copy
+                logger.info("Using pre-copied FAISS index at %s", index_path_str)
+                local_index_path = index_path_str
+            else:
+                logger.info("Downloading 64GB index directly from GCS (bypassing FUSE)...")
+                gcs_uri = index_path_str.replace("/gcs/", "gs://")
+                try:
+                    subprocess.run(["gcloud", "storage", "cp", gcs_uri, local_index_path], check=True)
+                except FileNotFoundError:
+                    subprocess.run(["gsutil", "cp", gcs_uri, local_index_path], check=True)
+                logger.info("Direct download complete!")
+
+        logger.info("Loading FAISS index from local disk...")
         index = faiss.read_index(local_index_path)
-        
-        # 3. Load the disk-backed Arrow dataset (FUSE handles this perfectly since it's chunked)
+
         logger.info("Loading Arrow dataset...")
         meta_data = load_from_disk(str(meta_path))
-        
+
         return cls(index=index, meta_data=meta_data)
     
     # @classmethod

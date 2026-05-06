@@ -9,17 +9,22 @@ class MultiPerspectiveSampler:
     Implements Multi-Perspective Sampling from ICLR 2025.
     Clusters retrieved documents and creates m subsets of size k.
     """
-    def __init__(self, model_name="facebook/contriever-msmarco", device=None):
+    def __init__(self, model_name="facebook/contriever-msmarco", device=None, load_model=True):
         # Auto-detect device: uses CUDA for Vertex AI, CPU for your M3 Pro
         if device is None:
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
         else:
             self.device = device
-            
-        print(f"Initializing MultiPerspectiveSampler on {self.device}")
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModel.from_pretrained(model_name).to(self.device)
-        self.model.eval()
+
+        self._model_name = model_name
+        self.tokenizer = None
+        self.model = None
+
+        if load_model:
+            print(f"Initializing MultiPerspectiveSampler on {self.device}")
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+            self.model = AutoModel.from_pretrained(model_name).to(self.device)
+            self.model.eval()
 
     @torch.inference_mode()
     def _get_embeddings(self, question, passages):
@@ -27,6 +32,11 @@ class MultiPerspectiveSampler:
         Embeds strings with regard to the question instruction.
         Uses mean-pooling consistent with index.py.
         """
+        if self.model is None:
+            raise RuntimeError(
+                "MultiPerspectiveSampler was created with load_model=False. "
+                "Pass precomputed_emb to generate_subsets() instead."
+            )
         # Instruction-aware formatting for Speculative RAG
         texts = [f"Question: {question} Document: {p}" for p in passages]
         

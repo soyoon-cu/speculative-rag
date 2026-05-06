@@ -23,7 +23,12 @@ INT8_Q = False
 
 # Model names
 MODEL_MISTRAL_7B        = "mistralai/Mistral-7B-v0.1"
-MODEL_MISTRAL_INSTRUCT  = "mistralai/Mistral-7B-Instruct-v0.1"
+# MODEL_MISTRAL_INSTRUCT  = "mistralai/Mistral-7B-Instruct-v0.1"
+import os
+MODEL_MISTRAL_INSTRUCT = os.getenv(
+    "DRAFTER_MODEL_PATH",
+    "mistralai/Mistral-7B-Instruct-v0.1"
+)
 
 # smoke test models
 MODEL_PHI2   = "microsoft/phi-2"           
@@ -31,7 +36,7 @@ MODEL_TINYLLAMA = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 
 
 PROFILE_RUN = False
-PROFILE_BASE_DIR = Path('./profiler_traces')
+PROFILE_BASE_DIR = Path(os.getenv("RESULTS_PATH", "./verifier_output")) / "profiler_traces"
 DRAFTER_OUTPUT_PATH = Path('./drafter_output')
 
 # hyperparamters
@@ -92,7 +97,7 @@ def run_no_opt():
         use_bnb_nf4 = BNB_AVAILABLE, 
         use_int8 = INT8_Q,
         profile_dir = PROFILE_BASE_DIR/'no_opt',
-        test = False)
+        test = True)
 
 
 def run_nf4():
@@ -114,7 +119,7 @@ def run_nf4():
         use_bnb_nf4 = True, 
         use_int8 = INT8_Q,
         profile_dir = PROFILE_BASE_DIR/'bnb',
-        test = False
+        test = True
         )
 
 
@@ -137,7 +142,7 @@ def run_int8():
         use_bnb_nf4 = BNB_AVAILABLE, 
         use_int8 = True,
         profile_dir = PROFILE_BASE_DIR/'int8',
-        test = False)
+        test = True)
 
 
 def run_vllm():
@@ -159,7 +164,7 @@ def run_vllm():
         use_bnb_nf4 = BNB_AVAILABLE, 
         use_int8 = INT8_Q,
         profile_dir = PROFILE_BASE_DIR/'vllm_m5_k2',
-        test = False
+        test = True
         )
 
 
@@ -183,7 +188,7 @@ def run_m():
             use_vllm = True,
             use_bnb_nf4 = BNB_AVAILABLE, 
             use_int8 = INT8_Q,
-            test = False)
+            test = True)
 
 
 def run_k():
@@ -206,7 +211,7 @@ def run_k():
             use_vllm = True,
             use_bnb_nf4 = BNB_AVAILABLE, 
             use_int8 = INT8_Q,
-            test = False)
+            test = True)
 
 if __name__ == "__main__":
     multiprocessing.set_start_method('spawn', force=True)

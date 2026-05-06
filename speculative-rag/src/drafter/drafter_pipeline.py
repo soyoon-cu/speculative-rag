@@ -223,7 +223,7 @@ def load_pipeline(model_name, use_vllm ,use_bnb_nf4, use_int8, index_path = INDE
     retriever = ContrieverRetriever(index=faiss_index, device=str(DEVICE))
 
     logger.info("Loading MultiPerspectiveSampler …")
-    sampler = MultiPerspectiveSampler(device=str(DEVICE))
+    sampler = MultiPerspectiveSampler(device=str(DEVICE), load_model=False)
 
     logger.info("Loading BatchedDrafter (%s) …", model_name)
     drafter = BatchedDrafter(
@@ -319,7 +319,7 @@ def save_draft_outputs(results, output_path):
 
 def run(m, k_docs, profile_run, output_path, model_name, use_vllm ,use_bnb_nf4, use_int8, profile_dir = None,
              log_every = 100, retriever = None, sampler = None, drafter = None, top_k = TOP_K, 
-            n_samples = 1000, test = True):
+            n_samples = 100, test = True):
     '''
     Run the drafting pipeline on TriviaQA validation split.
     If test = True : pipeline runs on first n_samples questions, else on complete  TriviaQA split

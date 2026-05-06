@@ -26,8 +26,12 @@ from .draft_output import DraftOutput
 from .vllm_ import VLLM
 
 
-
-MODEL_MISTRAL_7B   = "mistralai/Mistral-7B-v0.1"
+import os
+MODEL_MISTRAL_7B = os.getenv(
+    "DRAFTER_MODEL_PATH",
+    "mistralai/Mistral-7B-Instruct-v0.1"
+)
+# MODEL_MISTRAL_7B   = "mistralai/Mistral-7B-v0.1"
 
 
 class BatchedDrafter:

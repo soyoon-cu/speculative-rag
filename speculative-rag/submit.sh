@@ -20,7 +20,7 @@ workerPoolSpecs:
       imageUri: ${IMAGE_URI}
       env:
         - name: HF_TOKEN
-          value: "PUT TOKEN HERE"
+          value: "${HF_TOKEN}"
         - name: HF_HUB_OFFLINE
           value: "0"
         - name: VERIFIER_MODEL_PATH

@@ -1,4 +1,5 @@
 vertex_config.yaml
+config.mk
 passages_meta.pkl
 passages_meta_arrow/
 drafter_output/

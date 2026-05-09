@@ -31,8 +31,6 @@ MODEL_MISTRAL_7B = os.getenv(
     "DRAFTER_MODEL_PATH",
     "mistralai/Mistral-7B-Instruct-v0.1"
 )
-# MODEL_MISTRAL_7B   = "mistralai/Mistral-7B-v0.1"
-
 
 class BatchedDrafter:
     def __init__(
@@ -82,6 +80,18 @@ class BatchedDrafter:
         else:
             self.load_transformers(model_name)
 
+    def destroy(self):
+        # release GPU memory befor next iteration
+        if self.use_vllm and hasattr(self, '_vllm') and hasattr(self._vllm, 'vllm_llm'):
+            del self._vllm.vllm_llm
+            del self._vllm
+        elif hasattr(self, 'model'):
+            del self.model
+        import gc, torch
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
     # Timing helper
     @staticmethod
     def sync_time():
@@ -122,19 +132,33 @@ class BatchedDrafter:
                 bnb_4bit_use_double_quant = True, # QLoRA
             )
             model_kwargs['quantization_config'] = bnb_cfg
-            model_kwargs.pop('torch_dtype') # BnB own dtype
-    
+            model_kwargs.pop('torch_dtype')  # BnB manages dtype
+
             logger.info('NF4 4-bit quantization enabled via bitsandbytes')
-    
+
         if self.is_cuda and self.use_int8 and not self.use_bnb_nf4:
-            model_kwargs['load_in_8bit'] = True 
-            
+            model_kwargs['load_in_8bit'] = True
+
             logger.info('INT8 quantization enabled via bitsandbytes')
     
         logger.info("Loading %s  dtype=%s  device=%s …", model_name, dtype, self.device)
-        t0=self.sync_time()
-    
-        self.model = AutoModelForCausalLM.from_pretrained(model_name, **model_kwargs)
+        t0 = self.sync_time()
+
+        is_bnb = 'quantization_config' in model_kwargs or model_kwargs.get('load_in_8bit')
+        if is_bnb:
+            from transformers import PreTrainedModel
+            _orig_to = PreTrainedModel.to
+            PreTrainedModel.to = lambda self, *a, **kw: self
+            try:
+                self.model = AutoModelForCausalLM.from_pretrained(model_name, **model_kwargs)
+            finally:
+                PreTrainedModel.to = _orig_to
+            
+            for buf in self.model.buffers():
+                if buf.device.type == 'cpu':
+                    buf.data = buf.data.to(self.device)
+        else:
+            self.model = AutoModelForCausalLM.from_pretrained(model_name, **model_kwargs)
 
         if not self.is_cuda:
             self.model = self.model.to(self.device)

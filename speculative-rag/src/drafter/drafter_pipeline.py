@@ -329,7 +329,8 @@ def run(m, k_docs, profile_run, output_path, model_name, use_vllm ,use_bnb_nf4, 
     '''
     if test: logger.info("=== TEST RUN: n=%d questions from TriviaQA validation ===", n_samples)
 
-    if retriever is None or sampler is None or drafter is None:
+    _created_pipeline = retriever is None or sampler is None or drafter is None
+    if _created_pipeline:
         retriever, sampler, drafter = load_pipeline(model_name, use_vllm ,use_bnb_nf4, use_int8)
     results = []
     
@@ -351,7 +352,7 @@ def run(m, k_docs, profile_run, output_path, model_name, use_vllm ,use_bnb_nf4, 
             top_k  = top_k,
             m   = m,
             k_docs      = k_docs,
-            profile_run = profile_run and (i == 0),  # only profile first question
+            profile_run = profile_run and (i == 75),
             profile_dir = profile_dir,
         )
         results.append(vi)
@@ -369,5 +370,9 @@ def run(m, k_docs, profile_run, output_path, model_name, use_vllm ,use_bnb_nf4, 
     save_draft_outputs(results, output_path)
 
     logger.info('Draft output results saved at %s', output_path)
+
+    # Release GPU memory
+    if _created_pipeline:
+        drafter.destroy()
 
     return results

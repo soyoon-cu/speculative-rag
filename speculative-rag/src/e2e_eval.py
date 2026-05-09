@@ -6,21 +6,21 @@ import json
 import os
 from pathlib import Path
 import logging
-import numpy as np # NEW: Required for p50/p95 latency math
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s | %(message)s')
 logger = logging.getLogger(__name__)
 
-# import drafter test functions
 from drafter.run_tests import (
-    run_test, 
-    run_test_profiler, 
-    run_no_opt, 
-    run_nf4, 
-    run_int8, 
-    run_vllm, 
-    run_m, 
-    run_k
+    run_test,
+    run_test_profiler,
+    run_no_opt,
+    run_nf4,
+    run_int8,
+    run_vllm,
+    run_m,
+    run_k,
+    _run_single_m,
+    _run_single_k,
 )
 
 EXPERIMENT_MAP = {
@@ -39,15 +39,101 @@ VERIFIER_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 Path("drafter_output").mkdir(parents=True, exist_ok=True)
 
-# VERIFIER_MODEL = "mistralai/Mistral-7B-Instruct-v0.1"
 VERIFIER_MODEL = os.getenv(
     "VERIFIER_MODEL_PATH",
     "/gcs/standard-rag-results-2026/models/mistral-7b-instruct-v0.1"
 )
 
-def _drafter_worker(target_func):
-    """Isolated worker to run the drafter function and release VRAM."""
-    target_func()
+def run_verifier_only(input_path: str, stem: str, drafter_latency_s: float = 0.0):
+    """Run the verifier on a saved drafter output without re-running the drafter.
+
+    Args:
+        input_path:        Path to the saved drafter JSON (local or GCS-mounted).
+        stem:              Output file stem, e.g. "vllm_m5_k2".
+        drafter_latency_s: Wall-clock seconds the drafter took (for total pipeline metric).
+    """
+    backup_file = Path(input_path)
+    verifier_out_path = VERIFIER_OUTPUT_DIR / f"{stem}.json"
+
+    logger.info("=== VERIFIER ONLY MODE: Reading %s ===", backup_file)
+    if not backup_file.exists():
+        raise FileNotFoundError(f"Cannot find saved drafter output at {backup_file}")
+
+    t1 = time.perf_counter()
+    cmd = [
+        sys.executable, "verifier/verifier.py",
+        "--input-path", str(backup_file),
+        "--output-path", str(verifier_out_path),
+        "--model-name", VERIFIER_MODEL,
+        "--n-samples", "0",
+    ]
+    subprocess.run(cmd, check=True)
+    verifier_latency = time.perf_counter() - t1
+
+    with open(verifier_out_path, "r") as f:
+        data = json.load(f)
+
+    records = data.get("results", data)
+    verifier_summary = data.get("summary", {})
+
+    correct_count = sum(1 for r in records if r.get("is_correct", False))
+    total_examples = len(records)
+    accuracy = (correct_count / total_examples) * 100 if total_examples else 0
+    total_latency = drafter_latency_s + verifier_latency
+
+    final_payload = {
+        "experiment_name": stem,
+        "n_examples": total_examples,
+        "accuracy_em": round(accuracy, 2),
+        "total_drafter_latency_s": round(drafter_latency_s, 2),
+        "total_verifier_latency_s": round(verifier_latency, 2),
+        "total_pipeline_latency_s": round(total_latency, 2),
+        "total_drafter_tok_in":  verifier_summary.get("total_drafter_tok_in"),
+        "total_drafter_tok_out": verifier_summary.get("total_drafter_tok_out"),
+        "total_verifier_tok_in": verifier_summary.get("total_verifier_tok_in"),
+        "avg_drafter_tok_in":    verifier_summary.get("avg_drafter_tok_in"),
+        "avg_drafter_tok_out":   verifier_summary.get("avg_drafter_tok_out"),
+        "avg_verifier_tok_in":   verifier_summary.get("avg_verifier_tok_in"),
+        "latency_p50_ms": {
+            "retrieve": verifier_summary.get("p50_retrieve_ms"),
+            "sample":   verifier_summary.get("p50_sample_ms"),
+            "draft":    verifier_summary.get("p50_draft_ms"),
+            "verify":   verifier_summary.get("p50_verify_ms"),
+            "e2e":      verifier_summary.get("p50_e2e_ms"),
+        },
+        "latency_p95_ms": {
+            "retrieve": verifier_summary.get("p95_retrieve_ms"),
+            "sample":   verifier_summary.get("p95_sample_ms"),
+            "draft":    verifier_summary.get("p95_draft_ms"),
+            "verify":   verifier_summary.get("p95_verify_ms"),
+            "e2e":      verifier_summary.get("p95_e2e_ms"),
+        },
+        "per_example": records,
+    }
+
+    metrics_out_path = verifier_out_path.with_name(f"{stem}_metrics.json")
+    with open(metrics_out_path, "w") as f:
+        json.dump(final_payload, f, indent=2)
+
+    logger.info("=== VERIFICATION COMPLETE | Acc: %.2f%% ===", accuracy)
+
+
+SWEEP_CONFIG = {
+    "run_m": {
+        "values": [5, 10, 15, 20],
+        "func": _run_single_m,
+        "output_template": "drafter_output/vllm_m{v}.json",
+    },
+    "run_k": {
+        "values": [2, 4, 6, 10],
+        "func": _run_single_k,
+        "output_template": "drafter_output/vllm_k{v}.json",
+    },
+}
+
+def _drafter_worker(target_func, *args):
+    """Isolated worker to run the drafter function and release VRAM on exit."""
+    target_func(*args)
 
 def evaluate_pipeline(experiment_name: str):
     if experiment_name not in EXPERIMENT_MAP:
@@ -58,31 +144,47 @@ def evaluate_pipeline(experiment_name: str):
     
     logger.info(f"=== Starting E2E Pipeline for: {experiment_name} ===")
 
-    # ---------------------------------------------------------
-    # PHASE 1: DRAFTER
-    # ---------------------------------------------------------
-    t0 = time.perf_counter()
-    p = multiprocessing.Process(target=_drafter_worker, args=(target_func,))
-    p.start()
-    p.join()
-    
-    if p.exitcode != 0:
-        raise RuntimeError(f"Drafter phase crashed with exit code {p.exitcode}. Halting pipeline.")
-        
-    drafter_latency = time.perf_counter() - t0
-    logger.info(f"Drafter Phase Complete. Total Draft Latency: {drafter_latency:.2f}s")
-
-    # AUTO-BACKUP
+    # Drafter
     import shutil
     backup_dir = VERIFIER_OUTPUT_DIR.parent / "drafter_backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
-    if Path("drafter_output").exists():
-        shutil.copytree("drafter_output", backup_dir, dirs_exist_ok=True)
-        logger.info(f"IMMORTALIZED: Safely backed up raw drafts to {backup_dir}")
 
-    # ---------------------------------------------------------
-    # PHASE 2 & 3: VERIFIER & METRICS
-    # ---------------------------------------------------------
+    t0 = time.perf_counter()
+
+    if experiment_name in SWEEP_CONFIG:
+        # Each sweep value runs on own subprocess
+        sweep = SWEEP_CONFIG[experiment_name]
+        for v in sweep["values"]:
+            logger.info("=== SWEEP %s | value=%s ===", experiment_name, v)
+            p = multiprocessing.Process(
+                target=_drafter_worker,
+                args=(sweep["func"], v),
+            )
+            p.start()
+            p.join()
+            if p.exitcode != 0:
+                logger.error(
+                    "Drafter sweep value=%s crashed (exit code %s) — skipping.", v, p.exitcode
+                )
+                continue
+            out_file = Path(sweep["output_template"].format(v=v))
+            if out_file.exists():
+                shutil.copy2(out_file, backup_dir / out_file.name)
+                logger.info("Backed up %s → %s", out_file.name, backup_dir)
+    else:
+        p = multiprocessing.Process(target=_drafter_worker, args=(target_func,))
+        p.start()
+        p.join()
+        if p.exitcode != 0:
+            raise RuntimeError(f"Drafter phase crashed with exit code {p.exitcode}. Halting pipeline.")
+        if Path("drafter_output").exists():
+            shutil.copytree("drafter_output", backup_dir, dirs_exist_ok=True)
+            logger.info("IMMORTALIZED: Safely backed up raw drafts to %s", backup_dir)
+
+    drafter_latency = time.perf_counter() - t0
+    logger.info("Drafter Phase Complete. Total Draft Latency: %.2fs", drafter_latency)
+
+    # Verifier
     for drafter_file in expected_outputs:
         drafter_out_path = Path(drafter_file)
         
@@ -97,7 +199,8 @@ def evaluate_pipeline(experiment_name: str):
             sys.executable, "verifier/verifier.py",
             "--input-path", str(drafter_out_path),
             "--output-path", str(verifier_out_path),
-            "--model-name", VERIFIER_MODEL 
+            "--model-name", VERIFIER_MODEL,
+            "--n-samples", "0",
         ]
 
         verifier_profile_dir = str(VERIFIER_OUTPUT_DIR / "profiler_traces" / f"{drafter_out_path.stem}_verifier")
@@ -110,12 +213,11 @@ def evaluate_pipeline(experiment_name: str):
         elif experiment_name == "no_opt":
             cmd.extend(["--profile-run", "--profile-dir", verifier_profile_dir])
         
-        # logger.info(f"Launching Verifier + Nsys Profiler on {drafter_out_path}...")
         subprocess.run(cmd, check=True)
         verifier_latency = time.perf_counter() - t1
         logger.info(f"Verifier logic complete in {verifier_latency:.2f}s")
 
-        # --- ADVANCED METRICS PACKAGING ---
+        # Metrics
         with open(verifier_out_path, 'r') as f:
             data = json.load(f)
 
@@ -132,12 +234,12 @@ def evaluate_pipeline(experiment_name: str):
             "n_examples": total_examples,
             "accuracy_em": round(accuracy, 2),
 
-            # --- MACRO TIMING ---
+            # Total latencies
             "total_drafter_latency_s": round(drafter_latency, 2),
             "total_verifier_latency_s": round(verifier_latency, 2),
             "total_pipeline_latency_s": round(total_latency, 2),
 
-            # --- THROUGHPUT (totals + per-question averages) ---
+            # Throughputs
             "total_drafter_tok_in":   verifier_summary.get("total_drafter_tok_in"),
             "total_drafter_tok_out":  verifier_summary.get("total_drafter_tok_out"),
             "total_verifier_tok_in":  verifier_summary.get("total_verifier_tok_in"),
@@ -145,7 +247,7 @@ def evaluate_pipeline(experiment_name: str):
             "avg_drafter_tok_out":    verifier_summary.get("avg_drafter_tok_out"),
             "avg_verifier_tok_in":    verifier_summary.get("avg_verifier_tok_in"),
 
-            # --- MICRO TIMING (PERCENTILES) ---
+            # p50/p95 latencies
             "latency_p50_ms": {
                 "retrieve": verifier_summary.get("p50_retrieve_ms"),
                 "sample":   verifier_summary.get("p50_sample_ms"),
@@ -161,7 +263,7 @@ def evaluate_pipeline(experiment_name: str):
                 "e2e":      verifier_summary.get("p95_e2e_ms"),
             },
 
-            # Keep raw data for custom analysis
+            # raw data
             "per_example": records
         }
         
@@ -177,77 +279,14 @@ if __name__ == "__main__":
     multiprocessing.set_start_method('spawn', force=True)
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--run", choices=list(EXPERIMENT_MAP.keys()) + ["verify_saved"], default="test")
+    parser.add_argument("--run", choices=list(EXPERIMENT_MAP.keys()), default="test")
+    parser.add_argument("--verify-only-input", default=None, help="Path to saved drafter JSON")
+    parser.add_argument("--verify-only-stem", default=None, help="Output stem, e.g. vllm_m5_k2")
+    parser.add_argument("--verify-only-drafter-latency", type=float, default=0.0, help="Drafter time in seconds")
     args = parser.parse_args()
 
-    # ==========================================
-    # THE VERIFIER-ONLY BYPASS
-    # ==========================================
-    if args.run == "verify_saved":
-        logger.info("=== VERIFIER ONLY MODE: Reading from GCS Vault ===")
-        
-        # 1. Point directly to the cloud backup
-        backup_file = Path("/gcs/speculative-rag-results-2026/drafter_backups/vllm_m5_k2.json")
-        verifier_out_path = VERIFIER_OUTPUT_DIR / "vllm_m5_k2.json"
-        
-        if not backup_file.exists():
-            logger.error(f"Cannot find backup at {backup_file}! Did the bucket name change?")
-            sys.exit(1)
-
-        # 2. Run the Verifier Subprocess
-        t1 = time.perf_counter()
-        cmd = [
-            sys.executable, "verifier/verifier.py",
-            "--input-path", str(backup_file),
-            "--output-path", str(verifier_out_path),
-            "--model-name", VERIFIER_MODEL, 
-            "--n-samples", "100" # Explicitly match your test slice
-        ]
-
-        subprocess.run(cmd, check=True)
-        verifier_latency = time.perf_counter() - t1
-        
-        # 3. Package the Advanced Metrics
-        with open(verifier_out_path, 'r') as f:
-            records = json.load(f)
-            
-        correct_count = sum(1 for r in records if r.get("is_correct", False))
-        total_examples = len(records)
-        accuracy = (correct_count / total_examples) * 100 if total_examples > 0 else 0
-        
-        # CRITICAL: We hardcode the 7973.75s from your crashed logs so the Tokens/Sec math remains accurate!
-        drafter_latency = 7973.75 
-        total_latency = drafter_latency + verifier_latency
-
-        retrieve_lats = [r.get("retrieval_time_s", 0) * 1000 for r in records]
-        sample_lats = [r.get("sampling_time_s", 0) * 1000 for r in records]
-        draft_lats = [r.get("drafting_time_s", 0) * 1000 for r in records]
-        
-        prompt_tokens = sum(r.get("drafts_tokens_in", 0) + r.get("verifier_tokens_in", 0) for r in records)
-        completion_tokens = sum(r.get("drafts_tokens_out", 0) + r.get("verifier_tokens_out", 0) for r in records)
-        total_tokens = prompt_tokens + completion_tokens
-
-        final_payload = {
-            "experiment_name": "vllm_m5_k2_verify_only",
-            "n_examples": total_examples,
-            "accuracy_em": round(accuracy, 2),
-            "total_drafter_latency_s": drafter_latency,
-            "total_verifier_latency_s": round(verifier_latency, 2),
-            "total_pipeline_latency_s": round(total_latency, 2),
-            "throughput_examples_per_sec": round(total_examples / total_latency, 2) if total_latency > 0 else 0,
-            "throughput_tokens_per_sec": round(total_tokens / total_latency, 2) if total_latency > 0 else 0,
-            "total_prompt_tokens": prompt_tokens,
-            "total_completion_tokens": completion_tokens,
-            "retrieve_latency_ms": {"p50": round(np.percentile(retrieve_lats, 50), 2) if retrieve_lats else 0, "p95": round(np.percentile(retrieve_lats, 95), 2) if retrieve_lats else 0},
-            "sample_latency_ms": {"p50": round(np.percentile(sample_lats, 50), 2) if sample_lats else 0, "p95": round(np.percentile(sample_lats, 95), 2) if sample_lats else 0},
-            "draft_latency_ms": {"p50": round(np.percentile(draft_lats, 50), 2) if draft_lats else 0, "p95": round(np.percentile(draft_lats, 95), 2) if draft_lats else 0},
-        }
-        
-        metrics_out_path = verifier_out_path.with_name("vllm_m5_k2_metrics.json")
-        with open(metrics_out_path, 'w') as f:
-            json.dump(final_payload, f, indent=2)
-            
-        logger.info(f"=== VERIFICATION COMPLETE | Acc: {accuracy:.2f}% ===")
-        sys.exit(0) # Stop the script so it doesn't try to run evaluate_pipeline
-    
-    evaluate_pipeline(args.run)
+    if args.verify_only_input:
+        stem = args.verify_only_stem or Path(args.verify_only_input).stem
+        run_verifier_only(args.verify_only_input, stem, args.verify_only_drafter_latency)
+    else:
+        evaluate_pipeline(args.run)

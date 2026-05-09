@@ -278,6 +278,9 @@ def main(
     # ── Load model ────────────────────────────────────────────────────────────
     console.print(f"[bold cyan]Loading Verifier LM ({model_name})[/bold cyan]...")
     tokenizer     = AutoTokenizer.from_pretrained(model_name)
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token    = tokenizer.eos_token
+        tokenizer.pad_token_id = tokenizer.eos_token_id
     llm           = None
     hf_model      = None
     sampling_params = None
@@ -312,12 +315,32 @@ def main(
             console.print("  INT8 quantisation enabled")
             quant_config = BitsAndBytesConfig(load_in_8bit=True)
 
-        hf_model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            quantization_config=quant_config,
-            device_map="auto",
-            torch_dtype=torch.bfloat16,   # matches drafter convention
-        )
+        if quant_config is not None:
+            from transformers import PreTrainedModel
+            _orig_to = PreTrainedModel.to
+            PreTrainedModel.to = lambda self, *a, **kw: self
+            try:
+                hf_model = AutoModelForCausalLM.from_pretrained(
+                    model_name,
+                    quantization_config=quant_config,
+                    device_map="auto",
+                    torch_dtype=torch.bfloat16,
+                )
+            finally:
+                PreTrainedModel.to = _orig_to
+            # BnB places quantized params on CUDA, but non-param buffers
+            # (e.g. RoPE cos/sin cache) stay on CPU — move them now.
+            _model_device = next(hf_model.parameters()).device
+            for buf in hf_model.buffers():
+                if buf.device.type == 'cpu':
+                    buf.data = buf.data.to(_model_device)
+        else:
+            hf_model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                quantization_config=quant_config,
+                device_map="auto",
+                torch_dtype=torch.bfloat16,
+            )
         hf_model.eval()
 
     # ── Load drafter data ─────────────────────────────────────────────────────
@@ -377,7 +400,7 @@ def main(
         # ── PyTorch Profiler — FIRST question only, matches drafter pattern ───
         # FIX 7: profiler wraps the forward pass(es), not the outer question loop.
         #        with_stack=False matches the drafter's generate_with_profiler().
-        is_first_question  = (q_idx == 0)
+        is_first_question  = (q_idx == 75)
         should_profile_hf  = profile_run and is_first_question and not use_vllm
 
         if should_profile_hf:

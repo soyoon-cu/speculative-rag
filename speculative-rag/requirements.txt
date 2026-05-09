@@ -1,7 +1,7 @@
 transformers==4.41.0
 huggingface-hub>=0.23.0,<1.0
 datasets
-accelerate
+accelerate>=0.26.0
 sentencepiece
 protobuf
 faiss-cpu

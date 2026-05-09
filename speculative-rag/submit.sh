@@ -2,6 +2,9 @@
 IMAGE_URI=$1
 REGION=$2
 EXPERIMENT=${3:-test}
+N_SAMPLES=${4:-100}
+GCS_ASSETS_BUCKET=${5:-standard-rag-results-2026}
+GCS_RESULTS_BUCKET=${6:-speculative-rag-results-2026}
 echo "Generating Vertex AI config for run: ${EXPERIMENT}..."
 cat <<EOF > vertex_config.yaml
 workerPoolSpecs:
@@ -19,14 +22,16 @@ workerPoolSpecs:
         - name: HF_TOKEN
           value: "PUT TOKEN HERE"
         - name: HF_HUB_OFFLINE
-          value: "1"
+          value: "0"
         - name: VERIFIER_MODEL_PATH
-          value: "/gcs/standard-rag-results-2026/models/mistral-7b-instruct-v0.1"
+          value: "/gcs/${GCS_ASSETS_BUCKET}/models/mistral-7b-instruct-v0.1"
         - name: DRAFTER_MODEL_PATH
-          value: "/gcs/standard-rag-results-2026/models/mistral-7b-instruct-v0.1" 
+          value: "/gcs/${GCS_ASSETS_BUCKET}/models/mistral-7b-instruct-v0.1"
+        - name: N_SAMPLES
+          value: "${N_SAMPLES}"
 EOF
 if [ "$EXPERIMENT" = "run_vllm" ]; then
-    echo "PROFILING DETECTED: Injecting Nsys global wrapper for ${EXPERIMENT}..."
+    echo "Injecting Nsys global wrapper for ${EXPERIMENT}..."
     cat <<EOF >> vertex_config.yaml
       command: 
         - /opt/nvidia/nsight-systems/bin/nsys
@@ -35,32 +40,31 @@ if [ "$EXPERIMENT" = "run_vllm" ]; then
         - --cuda-memory-usage=true
         - --force-overwrite=true
         - -o
-        - /gcs/speculative-rag-results-2026/verifier_output/${EXPERIMENT}_hardware_trace
+        - /gcs/${GCS_RESULTS_BUCKET}/verifier_output/${EXPERIMENT}_hardware_trace
         - python
         - e2e_eval.py
       args:
         - --run
         - ${EXPERIMENT}
 EOF
-elif [ "$EXPERIMENT" = "scout" ]; then
-    echo "SCOUT DETECTED: Searching the container for Nsys..."
-    cat <<EOF >> vertex_config.yaml
-      command: 
-        - bash
-        - -c
-        - "find / -type f -name nsys 2>/dev/null > /gcs/speculative-rag-results-2026/nsys_location.txt"
-EOF
 else
-    echo "SWEEP DETECTED: Running pure Python for maximum throughput..."
     cat <<EOF >> vertex_config.yaml
+      echo "Run: ${EXPERIMENT}..."
       command: 
         - bash
         - -c
         - |
-          echo "Bypassing GCS FUSE: Copying 64GB FAISS index to local SSD..."
-          mkdir -p /tmp/index
-          cp /gcs/standard-rag-results-2026/faiss_contriever.index /tmp/index/faiss_contriever.index
+          echo "Bypassing GCS FUSE: Copying assets to local SSD..."
+          mkdir -p /tmp/index /tmp/model /tmp/meta
+          cp    /gcs/${GCS_ASSETS_BUCKET}/faiss_contriever.index /tmp/index/faiss_contriever.index &
+          cp -r /gcs/${GCS_ASSETS_BUCKET}/models/mistral-7b-instruct-v0.1 /tmp/model/ &
+          cp -r /gcs/${GCS_ASSETS_BUCKET}/passages_meta_arrow /tmp/meta/ &
+          wait
+          echo "All assets copied to local SSD."
           export INDEX_PATH="/tmp/index/faiss_contriever.index"
+          export VERIFIER_MODEL_PATH="/tmp/model/mistral-7b-instruct-v0.1"
+          export DRAFTER_MODEL_PATH="/tmp/model/mistral-7b-instruct-v0.1"
+          export PASSAGES_META_PATH="/tmp/meta/passages_meta_arrow"
           echo "Starting Python Pipeline..."
           python e2e_eval.py --run ${EXPERIMENT}
 EOF

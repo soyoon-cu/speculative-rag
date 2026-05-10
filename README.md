@@ -10,16 +10,16 @@
 
 - **Team Name:** Speculative RAG
 - **Members:**
-  - Soyoon Park (sp4412) - verifier pipeline and integration, full-pipeline evaluation, W&B/GitHub management, report writing.
-  - Rupeet Kaur (rk3408) - drafter pipeline, standard-rag baseline pipeline, profiling, optimization experiments(nf4, int8, vllm), report analysis.
-  - Hsuan-Ting Lin (hl3930) - multi-perspective sampling, no-opt/vLLM experiments, profiling visualizations, report methodology.
-  - Alexandar Vassilev (av3341) - Standard RAG implementation and GCP/Vertex evaluation setup.
+  - Soyoon Park (sp4412) - Created and managed the W&B project and GitHub repository; built the 21M-passage dataset embedding pipeline; ran the full baseline RAG evaluation on approximately 8k samples; implemented and integrated verifier logic into the Speculative RAG pipeline; ran Speculative RAG experiments including no-opt 1k samples, NF4, and the `m={5,10,15,20}` sweep; wrote the final report abstract, introduction, discussion/limitations, and conclusion.
+  - Rupeet Kaur (rk3408) - Built the full drafter pipeline from retrieval to sampling to drafting with final verifier inputs; modified the sampling pipeline for KV-cache-aware retrieval; modified the verifier pipeline to include vLLM profiling and PyTorch profiler support; integrated data fetching for Standard RAG; built Standard RAG components from generation through retrieval; built Speculative RAG tests for no optimization, NF4, INT8, vLLM, `m` sweep, and `k` sweep; produced PyTorch Profiler and Nsight Systems profiling analysis; wrote final report experiment analysis and before/after optimization/profiling analysis.
+  - Hsuan-Ting Lin (hl3930) - Implemented and debugged Speculative RAG sampling logic; ran and debugged no-opt and vLLM experiments on 100-sample tests; ran 1000-sample Speculative RAG tests; prepared profiler visualizations and performance analysis for no-opt, vLLM, and Standard RAG; wrote the final report literature review and methodology sections.
+  - Alexandar Vassilev (av3341) - Implemented the Standard RAG baseline pipeline and GCP/Vertex evaluation setup.
 
 ## Submission
 
 - **GitHub repository:** [https://github.com/soyoon-cu/speculative-rag](https://github.com/soyoon-cu/speculative-rag)
-- **Final report:** [`deliverables/SpeculativeRAG_HPML_Final_Report.pdf`](deliverables/SpeculativeRAG_HPML_Final_Report.pdf)
-- **Final presentation:** [`deliverables/HPML_Final_Presentation.pdf`](deliverables/HPML_Final_Presentation.pdf)
+- **Final report:** [`deliverables/Team14_HPML_Final_Report.pdf`](deliverables/Team14_HPML_Final_Report.pdf)
+- **Final presentation:** [`deliverables/Team14_HPML_Final_Presentation.pdf`](deliverables/Team14_HPML_Final_Presentation.pdf)
 - **Experiment-tracking dashboard:** [Weights & Biases project](https://wandb.ai/soyoon-columbia-university/hpml-rag)
 
 The report and presentation are included in `deliverables/` and are also uploaded to CourseWorks.
@@ -87,8 +87,8 @@ These results compare 1,000-sample Standard RAG and Speculative RAG no-optimizat
 ├── CONTRIBUTING.md
 ├── SECURITY.md
 ├── deliverables/
-│   ├── SpeculativeRAG_HPML_Final_Report.pdf
-│   └── HPML_Final_Presentation.pdf
+│   ├── Team14_HPML_Final_Report.pdf
+│   └── Team14_HPML_Final_Presentation.pdf
 ├── doc/
 │   └── speculative-rag-iclr2025.pdf
 ├── results/

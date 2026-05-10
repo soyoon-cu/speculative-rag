@@ -1,183 +1,328 @@
-# Speculative RAG: Latency-Quality Trade-offs in Multi-Draft Retrieval
+# HPML Final Project: Speculative RAG
 
-An end-to-end implementation of the [Speculative Retrieval-Augmented Generation (Speculative RAG)](doc/speculative-rag-iclr2025.pdf) pipeline, designed to quantify the trade-off between answer quality and inference latency on knowledge-intensive QA tasks.
+> **Course:** High Performance Machine Learning
+> **Semester:** Spring 2026
+> **Instructor:** Dr. Kaoutar El Maghraoui
 
-## Project Objective
+---
 
-Standard RAG architectures suffer from a critical bottleneck: processing long retrieved contexts leads to prohibitive latency and reasoning errors.
+## Team Information
 
-This project addresses this by implementing a **Speculative RAG pipeline:**
+- **Team Name:** Speculative RAG
+- **Members:**
+  - Soyoon Park (sp4412) - verifier integration, full-pipeline evaluation, W&B/GitHub management, report writing.
+  - Rupeet Kaur (rk3408) - drafter pipeline, standard-rag integration, profiling, optimization experiments, report analysis.
+  - Hsuan-Ting Lin (hl3930) - multi-perspective sampling, no-opt/vLLM experiments, profiling visualizations, report methodology.
+  - Alexandar Vassilev (av3341) - Standard RAG baseline pipeline and GCP/Vertex evaluation setup.
 
-1. **Multi-Perspective Selection:** Diversifying retrieved documents into distinct subsets.
+## Submission
 
-2. **Batched Multi-Draft Prompting:** Using a smaller, specialist Drafter model to generate multiple `{answer, rationale}` drafts in parallel.
+- **GitHub repository:** [https://github.com/soyoon-cu/speculative-rag](https://github.com/soyoon-cu/speculative-rag)
+- **Final report:** [`deliverables/SpeculativeRAG_HPML_Final_Report.pdf`](deliverables/SpeculativeRAG_HPML_Final_Report.pdf)
+- **Final presentation:** [`deliverables/HPML_Final_Presentation.pdf`](deliverables/HPML_Final_Presentation.pdf)
+- **Experiment-tracking dashboard:** [Weights & Biases project](https://wandb.ai/soyoon-columbia-university/hpml-rag)
 
-3. **Verifier-Based Selection:** Employing a larger Verifier model to select the best draft using log-probability-based confidence scoring.
+The report and presentation are included in `deliverables/` and are also uploaded to CourseWorks.
 
-### Performance Targets
+---
 
-- **Speedup:** $\ge 1.3\times$ p50 latency speedup at matched accuracy (within 1.0 EM of baseline).
+## 1. Problem Statement
 
-- **GPU Utilization:** $\ge 60\%$ average SM utilization via continuous batching.
+Retrieval-Augmented Generation improves factual question answering by adding external evidence to the model context, but long retrieved contexts increase inference latency and KV-cache memory pressure. This project targets **inference** optimization for TriviaQA RAG workloads on a single NVIDIA A100 GPU. We compare a Standard RAG baseline against a Speculative RAG pipeline that drafts multiple answers over shorter passage subsets and uses a verifier to select the best draft. The main bottlenecks we studied were retrieval latency, autoregressive drafting overhead, GPU memory use, and single-GPU scheduling overhead.
 
-- **Stretch Goals:** Match or exceed the original paper's gains (e.g., $\ge +5.0$ EM or $\ge 1.8\times$ speedup at baseline EM).
+---
 
-## Architecture & Approach
+## 2. Model/Application Description
 
-- **Subset Selection (Diversity):** Retrieves top-n chunks and forms m subsets using embedding-based k-means clustering or an MMR diversification heuristic. Embeddings are precomputed offline.
+- **Application:** Retrieval-augmented question answering on TriviaQA.
+- **Baseline:** Standard RAG retrieves top-10 DPR Wikipedia passages and concatenates them into one prompt for generation.
+- **Optimized / experimental system:** Speculative RAG retrieves passages, clusters/samples passage subsets, generates multiple answer/rationale drafts, and verifies the best draft using log-probability scoring.
+- **Models:** `mistralai/Mistral-7B-Instruct-v0.1` for Standard RAG generation and for Speculative RAG drafter/verifier roles. We did not use the fine-tuned MDrafter or Mixtral verifier from the paper because of memory constraints.
+- **Frameworks:** PyTorch 2.3.1, HuggingFace Transformers, vLLM, FAISS, bitsandbytes, Typer, Google Cloud Vertex AI, Nsight Systems, PyTorch Profiler, Weights & Biases.
+- **Dataset:** TriviaQA validation split and DPR 100-word Wikipedia passage corpus. Data and FAISS artifacts are not committed to Git; they are downloaded or stored in GCS.
+- **Hardware target:** Single NVIDIA A100 80GB on GCP Vertex AI.
+- **Custom modifications:** Multi-perspective document subset sampling with k-means, batched drafter generation, verifier scoring with self-consistency and self-reflection terms, vLLM continuous batching, NF4 and INT8 experiment paths, and per-stage latency/profiling instrumentation.
 
-- **Batched Parallel Drafting:** Implements parallel drafting as batched multi-prompt generation through a single drafter engine using vLLM continuous batching (generating m drafts in one scheduling window).
+---
 
-- **Verifier-Based Selection:** Selects the best draft based on a log-probability scoring function: `Score = log P_V(a_j | q, r_j) + λ log P_D(r_j | q, S_j)`.
+## 3. Final Results Summary
 
-## Hardware & Software Stack
+### Speculative RAG Optimization Comparison
 
-Hardware: Single NVIDIA A100 (40GB) on GCP.
+These results compare Speculative RAG backends on 100 TriviaQA validation samples with `m=5`, `k=2`.
 
-- **Inference Engine:** [vLLM](https://github.com/vllm-project/vllm) (leveraging continuous batching and PagedAttention).
+| Metric | No Optimization | NF4 Quantization | vLLM | Best Observed Change |
+| --- | ---: | ---: | ---: | --- |
+| Exact Match | 54% | 48% | 47% | NF4/vLLM reduced accuracy in this setup |
+| p50 end-to-end latency | 10,681 ms | 12,881 ms | 9,131 ms | vLLM 14.5% faster than no-opt |
+| p50 draft latency | 3,937 ms | 7,662 ms | 1,932 ms | vLLM 50.9% faster than no-opt |
+| p50 verify latency | 64 ms | 98 ms | 81 ms | No-opt fastest verifier stage |
+| p50 retrieve latency | 6,609 ms | 5,140 ms | 7,050 ms | Retrieval remained the bottleneck |
+| Total pipeline time | 1,518 s | 2,007 s | 1,157 s | vLLM 23.8% faster than no-opt |
+| Peak GPU memory allocated | 15,797 MB | 6,129 MB | 470 MB | vLLM lowest measured allocation |
+| Throughput | 0.060 q/s | 0.045 q/s | 0.082 q/s | vLLM 1.37x higher than no-opt |
 
-- **Models**
+### Standard RAG vs. Speculative RAG
 
-  - **Drafter:** 7B class model (e.g., Mistral-7B).
+These results compare 1,000-sample Standard RAG and Speculative RAG no-optimization runs.
 
-  - **Verifier:** 7B-13B model (Stretch goal: Mixtral-8x7B).
+| Metric | Standard RAG | Speculative RAG No-Opt | Observation |
+| --- | ---: | ---: | --- |
+| Exact Match | 80% | 62% | Standard RAG was more accurate |
+| p50 end-to-end latency | 6,017 ms | 9,180 ms | Standard RAG was faster on one GPU |
+| Peak GPU memory | 73,066 MB | 15,797 MB | Speculative RAG used far less memory |
 
-- **Retrieval:** FAISS vector store with offline precomputed embeddings (InBedder-Roberta, E5, or BGE).
+**Hardware:** 1x NVIDIA A100 80GB on GCP Vertex AI, CUDA 12.1, PyTorch 2.3.1, vLLM 0.4.x.
 
-- **Optimizations:** INT8/NF4 quantization via `bitsandbytes`, KV-cache limits.
+**Headline result:** vLLM was the best Speculative RAG backend, reducing draft latency by about 51% and total pipeline time by about 24% over no optimization, but Standard RAG remained faster and more accurate in our single-GPU reproduction.
 
-- **Profiling:** Nsight Systems (`nsys`) and PyTorch profiler.
+---
 
-## Baselines & Evaluation
+## 4. Repository Structure
 
-Evaluated on knowledge-intensive datasets such as TriviaQA or PubHealth. Metrics include Exact Match (EM), p50/p95 latency, and GPU utilization.
-
-### Baselines for Comparison:
-
-- **Standard RAG:** Concatenate top-k retrieved chunks into one prompt and generate.
-
-- **CRAG-Inspired (Filter-then-Generate):** Lightweight filtering/reranking of retrieved chunks followed by generation with shorter context.
-
-## Repository Structure
-
-```
-speculative-rag/
+```text
+.
+├── README.md
+├── LICENSE
+├── CONTRIBUTING.md
+├── SECURITY.md
+├── deliverables/
+│   ├── SpeculativeRAG_HPML_Final_Report.pdf
+│   └── HPML_Final_Presentation.pdf
 ├── doc/
 │   └── speculative-rag-iclr2025.pdf
-├── standard-rag/          ← Standard RAG baseline (implemented)
-│   ├── README.md          ← full setup & run instructions
-│   ├── Makefile
+├── standard-rag/
+│   ├── README.md
 │   ├── Dockerfile
+│   ├── Makefile
 │   ├── pyproject.toml
-│   ├── infra/             ← Terraform: GCS, Artifact Registry, service account
+│   ├── infra/
+│   ├── scripts/
+│   ├── tests/
 │   └── src/rag/
-└── speculative-rag/       ← Speculative RAG implementation
-    ├── README.md          ← setup & run instructions
-    ├── Makefile
+└── speculative-rag/
+    ├── README.md
     ├── Dockerfile
-    ├── submit.sh          ← Vertex AI job launcher
+    ├── Makefile
+    ├── cloudbuild.yaml
+    ├── config.mk.example
+    ├── requirements.txt
+    ├── submit.sh
     └── src/
+        ├── data/
+        ├── sampling/
+        ├── drafter/
+        ├── verifier/
+        ├── e2e_eval.py
+        └── pipeline.py
 ```
 
-Each subdirectory is an independent project with its own environment, Docker image, and GCP infrastructure.
+---
 
-## Status
+## 5. Reproducibility Instructions
 
-| Component             | Status        | Notes |
-|-----------------------|---------------|-------|
-| Standard RAG baseline | **Complete**  | Vertex AI pipeline; see `standard-rag/` |
-| Speculative RAG       | **Implemented** | Drafter, sampler, verifier, Vertex runner; see `speculative-rag/` |
+### A. Environment Setup
 
-## Getting Started
+Clone the repository:
 
-Use the subproject README that matches the experiment you want to run:
+```bash
+git clone https://github.com/soyoon-cu/speculative-rag.git
+cd speculative-rag
+```
 
-- **[standard-rag/README.md](standard-rag/README.md)** for the baseline Standard RAG pipeline.
-- **[speculative-rag/README.md](speculative-rag/README.md)** for the Speculative RAG drafter/verifier pipeline.
-
-The guides cover:
-
-- GCP project configuration and API enablement
-- GPU quota increase instructions (required — new projects default to 0 GPU quota)
-- Docker build and push
-- Running smoke tests, full evaluations, profiling runs, and result fetches on Vertex AI
-
-### Standard RAG quick reference
+For local Standard RAG development:
 
 ```bash
 cd standard-rag
-
-# First-time setup
-make gcp-enable-apis     # enable Vertex AI, Artifact Registry, GCS APIs
-make infra-apply         # provision GCS bucket + Artifact Registry
-make docker-push         # build and push the container image
-
-# Run evaluation
-make vertex-submit               # smoke test (100k passages, 500 examples)
-make vertex-submit ENV=prod      # full eval (21M passages, 11k examples)
-make fetch-results               # download results.json and print table
+uv sync --all-extras
+uv run pytest -v
 ```
 
-### Speculative RAG quick reference
+For Speculative RAG local syntax checks:
 
 ```bash
 cd speculative-rag
+python3 -m compileall -q src
+bash -n submit.sh
+```
 
-# First-time setup
-cp config.mk.example config.mk
-# Edit config.mk with PROJECT_ID, REGION, REPO_NAME, IMAGE_NAME, INDEX_BUCKET, OUTPUT_BUCKET.
-export HF_TOKEN=hf_xxxx
+**System requirements:** Python 3.10+, CUDA 12.x for GPU runs, GCP project with billing enabled, Vertex AI, Cloud Build, Artifact Registry, Cloud Storage, and access to `mistralai/Mistral-7B-Instruct-v0.1`.
 
-# Build and submit a Vertex AI run
-make build
-make submit ARGS="run_vllm 100"
+### B. Experiment Tracking Dashboard
 
-# Download verifier outputs and profiler traces
+Public experiment dashboard:
+
+> **Dashboard:** [https://wandb.ai/soyoon-columbia-university/hpml-rag](https://wandb.ai/soyoon-columbia-university/hpml-rag)
+> **Platform used:** Weights & Biases
+
+The dashboard contains Standard RAG and Speculative RAG runs, including no-opt, NF4, vLLM, and `m`-sweep experiments.
+
+### C. Dataset
+
+The dataset and passage corpus are not committed to this repository.
+
+Standard RAG can download and build its retrieval assets:
+
+```bash
+cd standard-rag
+make download-data
+make build-index-subset
+```
+
+Full runs use the DPR Wikipedia passage corpus and TriviaQA validation split. Speculative RAG expects the FAISS index, passage metadata, and model artifacts to be available in the configured GCS buckets.
+
+### D. Standard RAG Baseline
+
+Configure GCP and environment variables:
+
+```bash
+cd standard-rag
+cp .env.example .env
+# Edit .env with GCP_PROJECT_ID, GCP_REGION, PROJECT_NAME, GCS_BUCKET, HF_TOKEN.
+make gcp-enable-apis
+make infra-init
+make infra-apply
+make docker-push
+```
+
+Run a smoke test:
+
+```bash
+make vertex-submit
+make vertex-logs
 make fetch-results
 ```
 
-`ARGS` maps to `submit.sh` as:
+Run the full validation evaluation:
 
-```text
-ARGS="<experiment> <n_samples> <index_bucket> <output_bucket>"
+```bash
+make clear-index-cache
+make vertex-submit ENV=prod
+make vertex-logs
+make fetch-results
 ```
 
-Common experiments include `test`, `test_p`, `no_opt`, `nf4`, `int8`, `run_vllm`, `run_m`, `run_k`, `verify_saved`, and `verify_no_opt`.
+### E. Speculative RAG Evaluation
 
-## Demo Dashboard
+Configure the speculative pipeline:
 
-The project includes a live performance dashboard featuring:
+```bash
+cd speculative-rag
+cp config.mk.example config.mk
+# Edit config.mk with PROJECT_ID, REGION, REPO_NAME, IMAGE_NAME, INDEX_BUCKET, OUTPUT_BUCKET.
+export HF_TOKEN=hf_xxxx
+```
 
-- **Live Latency Panel:** p50/p95 latency, speedup ratios, tokens/sec, queries/sec.
+Build and submit the main vLLM experiment:
 
-- **Subset/Diversity View:** 2D projection/table showing evidence diversity across draft subsets.
+```bash
+make build
+make submit ARGS="run_vllm 100"
+make fetch-results
+```
 
-- **Verifier Scoring Breakdown:** Visualization of the score components used for final selection.
+Other supported experiments:
 
-- **Rationale Inspection:** Real-time viewing of document-grounded rationales.
+```bash
+make submit ARGS="test 20"
+make submit ARGS="no_opt 100"
+make submit ARGS="nf4 100"
+make submit ARGS="int8 100"
+make submit ARGS="run_m 100"
+make submit ARGS="run_k 100"
+make submit ARGS="verify_saved 100"
+make submit ARGS="verify_no_opt 100"
+```
 
-## Contributing
+### F. Profiling
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the team, branch workflow, commit style, and code standards.
+Speculative RAG profiling is integrated into the experiment runners:
 
-## Security
+- PyTorch Profiler is used for HuggingFace no-optimization and NF4 runs.
+- Nsight Systems is used for the vLLM run through `submit.sh`.
 
-See [SECURITY.md](SECURITY.md) for guidance on secret management, GCP service account scoping, and what to do if a credential is accidentally exposed.
+Useful checks:
 
-## Team
+```bash
+cd speculative-rag
+make -n submit ARGS="run_vllm 10"
+bash -n submit.sh
+```
 
-- [Alexandar Vassilev](https://github.com/alex-is-busy-coding)
+### G. Quickstart: Reproduce the Main Speculative RAG Run
 
-- [Soyoon Park](https://github.com/soyoon-cu)
+The following sequence runs the primary vLLM Speculative RAG experiment after GCP buckets and Artifact Registry are configured:
 
-- [Hsuan-Ting Lin](https://github.com/Hsuan-Ting)
+```bash
+cd speculative-rag
+cp config.mk.example config.mk
+# Edit config.mk.
+export HF_TOKEN=hf_xxxx
+make build
+make submit ARGS="run_vllm 100"
+make fetch-results
+```
 
-- [Rupeet Kaur](https://github.com/RupeetK)
+---
 
-## License
+## 6. Results and Observations
 
-This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
+- vLLM was the strongest Speculative RAG optimization: it reduced p50 draft latency from 3,937 ms to 1,932 ms and total pipeline time from 1,518 s to 1,157 s.
+- NF4 reduced peak memory from 15,797 MB to 6,129 MB but increased latency and lowered EM from 54% to 48%.
+- Standard RAG outperformed Speculative RAG in accuracy and latency on one GPU because the Speculative RAG drafter was not fine-tuned and the original paper's multi-GPU drafter parallelism was not available.
+- Speculative RAG had a large memory advantage: 15.8 GB peak allocation compared with 73.1 GB for Standard RAG.
+- Retrieval became the main bottleneck after vLLM accelerated drafting. In the vLLM run, p50 retrieval latency was 7,050 ms out of 9,131 ms p50 end-to-end latency.
+- The `m`-sweep showed that increasing drafts from `m=5` to `m=20` improved EM only modestly while adding latency; `m=5` was the most practical setting in our single-GPU setup.
 
-## References
+---
 
-- Wang et al., *Speculative RAG: Enhancing Retrieval Augmented Generation Through Drafting*, ICLR 2025. ([paper PDF](doc/speculative-rag-iclr2025.pdf))
+## 7. Notes
+
+- `standard-rag/README.md` contains the complete baseline setup and Vertex AI workflow.
+- `speculative-rag/README.md` contains the Speculative RAG build, submit, and result-fetch workflow.
+- Secrets are loaded from `.env`, `config.mk`, or environment variables. Do not commit credentials, W&B keys, model weights, GCS data, or generated profiler traces.
+- Large artifacts such as FAISS indices, model weights, W&B logs, GCS output directories, and profiler traces are intentionally gitignored.
+
+### AI Use Disclosure
+
+Per the HPML AI Use Policy:
+
+**Did your team use any AI tool in completing this project?**
+
+- [x] Yes, we used AI assistance as described below.
+
+**Tools used:** Gemini, ChatGPT.
+
+**Specific purpose:** We used AI assistance to clarify Speculative RAG concepts, debug LaTeX syntax in the final report, debug retrieval/embedding integration, connect GCS bucket paths for embedded passage retrieval, handle failed imports, and explore Nsight Systems for the first time.
+
+**Sections affected:** Retriever code, final report polishing/debugging, vLLM/profiling setup.
+
+**How we verified correctness:** We verified imports, reran code paths, checked generated experiment outputs, and compared reported results against the raw W&B/profiler artifacts and JSON outputs.
+
+By submitting this project, the team confirms that the analysis, interpretations, and conclusions are our own, and that any AI assistance is fully disclosed here and in the final report.
+
+### License
+
+Released under the MIT License. See [`LICENSE`](LICENSE).
+
+### Citation
+
+If you build on this work, please cite:
+
+```bibtex
+@misc{park2026speculativeraghpml,
+  title  = {Speculative RAG: Latency-Quality Trade-offs in Multi-Draft Retrieval},
+  author = {Park, Soyoon and Kaur, Rupeet and Lin, Hsuan-Ting and Vassilev, Alexandar},
+  year   = {2026},
+  note   = {HPML Spring 2026 Final Project, Columbia University},
+  url    = {https://github.com/soyoon-cu/speculative-rag}
+}
+```
+
+### Contact
+
+Open a GitHub Issue in this repository for questions or reproduction problems.
+
+---
+
+*HPML Spring 2026 - Dr. Kaoutar El Maghraoui - Columbia University*

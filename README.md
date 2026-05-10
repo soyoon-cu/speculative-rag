@@ -20,7 +20,7 @@
 - **GitHub repository:** [https://github.com/soyoon-cu/speculative-rag](https://github.com/soyoon-cu/speculative-rag)
 - **Final report:** [`deliverables/Team14_HPML_Final_Report.pdf`](deliverables/Team14_HPML_Final_Report.pdf)
 - **Final presentation:** [`deliverables/Team14_HPML_Final_Presentation.pdf`](deliverables/Team14_HPML_Final_Presentation.pdf)
-- **Experiment-tracking dashboard:** [Weights & Biases project](https://wandb.ai/soyoon-columbia-university/hpml-rag)
+- **Experiment-tracking dashboard:** [Weights & Biases project](https://wandb.ai/soyoon-columbia-university/hpml_rag)
 
 The report and presentation are included in `deliverables/` and are also uploaded to CourseWorks.
 

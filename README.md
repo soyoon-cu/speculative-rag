@@ -91,6 +91,13 @@ These results compare 1,000-sample Standard RAG and Speculative RAG no-optimizat
 │   └── HPML_Final_Presentation.pdf
 ├── doc/
 │   └── speculative-rag-iclr2025.pdf
+├── results/
+│   └── plots
+│   └── nf4_drafter
+│   └── nf4_verifier
+│   └── no_opt_drafter
+│   └── standard_rag
+│   └── vllm
 ├── standard-rag/
 │   ├── README.md
 │   ├── Dockerfile

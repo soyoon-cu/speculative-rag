@@ -280,6 +280,10 @@ make fetch-results
 - Speculative RAG had a large memory advantage: 15.8 GB peak allocation compared with 73.1 GB for Standard RAG.
 - Retrieval became the main bottleneck after vLLM accelerated drafting. In the vLLM run, p50 retrieval latency was 7,050 ms out of 9,131 ms p50 end-to-end latency.
 - The `m`-sweep showed that increasing drafts from `m=5` to `m=20` improved EM only modestly while adding latency; `m=5` was the most practical setting in our single-GPU setup.
+- *What did not work:* NF4 solves the wrong problem in this setup.The 61% memory reduction is a structural benefit, but it comes at a 95% draft latency penalty due to per-token dequantization overhead in bitsandbytes.
+  ![Baseline vs Optimized latency](results/plots/before_after_latency.png)
+
+
 
 ---
 

@@ -10,10 +10,10 @@
 
 - **Team Name:** Speculative RAG
 - **Members:**
-  - Soyoon Park (sp4412) - verifier integration, full-pipeline evaluation, W&B/GitHub management, report writing.
-  - Rupeet Kaur (rk3408) - drafter pipeline, standard-rag integration, profiling, optimization experiments, report analysis.
+  - Soyoon Park (sp4412) - verifier pipeline and integration, full-pipeline evaluation, W&B/GitHub management, report writing.
+  - Rupeet Kaur (rk3408) - drafter pipeline, standard-rag baseline pipeline, profiling, optimization experiments(nf4, int8, vllm), report analysis.
   - Hsuan-Ting Lin (hl3930) - multi-perspective sampling, no-opt/vLLM experiments, profiling visualizations, report methodology.
-  - Alexandar Vassilev (av3341) - Standard RAG baseline pipeline and GCP/Vertex evaluation setup.
+  - Alexandar Vassilev (av3341) - Standard RAG implementation and GCP/Vertex evaluation setup.
 
 ## Submission
 

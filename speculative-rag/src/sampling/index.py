@@ -2,27 +2,45 @@
 
 from __future__ import annotations
 
+
 import contextlib
+
 import logging
+
 import pickle
+
 from pathlib import Path
 
+
 import os
+
 import shutil
+
 import subprocess
+
 import faiss
+
 import numpy as np
+
 import torch
+
 import typer
+
 from tqdm import tqdm
+
 from transformers import AutoModel, AutoTokenizer
+
 
 from datasets import load_from_disk
 
+
 logger = logging.getLogger(__name__)
 
+
 _CONTRIEVER_MODEL = "facebook/contriever-msmarco"
+
 _PASSAGE_BATCH = 512
+
 _DIM = 768
 
 
@@ -34,28 +52,44 @@ def load_passages(
     Columns: id \\t text \\t title
     Returns (ids, texts, titles).
     """
+
     ids, texts, titles = [], [], []
+
     with open(tsv_path, encoding="utf-8") as fh:
         next(fh)
+
         for i, line in enumerate(fh):
             if max_passages is not None and i >= max_passages:
                 break
+
             parts = line.rstrip("\n").split("\t")
+
             if len(parts) < 2:
                 continue
+
             pid = parts[0]
+
             text = parts[1]
+
             title = parts[2] if len(parts) > 2 else ""
+
             ids.append(pid)
+
             texts.append(text)
+
             titles.append(title)
+
     return ids, texts, titles
 
 
 def _mean_pool(token_embeddings: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+
     mask = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+
     summed = (token_embeddings * mask).sum(dim=1)
+
     counts = mask.sum(dim=1).clamp(min=1e-9)
+
     return summed / counts
 
 
@@ -67,9 +101,12 @@ def embed_passages(
     device: str,
     batch_size: int = _PASSAGE_BATCH,
 ) -> np.ndarray:
+
     all_embs: list[np.ndarray] = []
+
     for start in tqdm(range(0, len(texts), batch_size), desc="Embedding passages"):
         batch = texts[start : start + batch_size]
+
         inputs = tokenizer(
             batch,
             padding=True,
@@ -77,143 +114,123 @@ def embed_passages(
             max_length=512,
             return_tensors="pt",
         ).to(device)
+
         outputs = model(**inputs)
+
         embs = _mean_pool(outputs.last_hidden_state, inputs["attention_mask"])
+
         embs = torch.nn.functional.normalize(embs, p=2, dim=-1)
+
         all_embs.append(embs.cpu().float().numpy())
+
     return np.vstack(all_embs)
+
 
 class FAISSIndex:
     """Wraps a flat FAISS index (inner-product) with passage text lookup."""
 
-    # Added meta_data=None and made texts/titles optional to prevent crashing
-    def __init__(self, index: faiss.Index, texts: list[str] = None, titles: list[str] = None, meta_data = None) -> None:
+    def __init__(
+        self, index: faiss.Index, texts: list[str] = None, titles: list[str] = None, meta_data=None
+    ) -> None:
+
         self._index = index
+
         self._texts = texts
+
         self._titles = titles
+
         self._meta_data = meta_data
 
     def search(self, query_emb: np.ndarray, top_k: int) -> tuple[list[str], list[int]]:
         """Return top-k passage texts and their FAISS indices for a single (1, D) query embedding."""
+
         q = np.ascontiguousarray(query_emb, dtype=np.float32)
+
         distances, indices = self._index.search(q, top_k)
+
         passages: list[str] = []
+
         valid_indices = []
+
         for idx in indices[0]:
             if idx == -1:
                 continue
-            
-            # --- THE NEW ARROW LOGIC ---
-            # If we are using the disk-backed Arrow dataset:
+
             if self._meta_data is not None:
                 row = self._meta_data[int(idx)]
+
                 title = row["title"]
+
                 text = row["text"]
-            # Fallback for the old list method (useful if you ever run build_index again)
+
             else:
                 title = self._titles[idx]
+
                 text = self._texts[idx]
-            # ---------------------------
-                
+
             passages.append(f"{title}\n{text}" if title else text)
+
             valid_indices.append(int(idx))
+
         return passages, valid_indices
 
     def get_vectors(self, indices):
-        'Retrieve stored passage embeddings from FAISS index at specified indices'
+        "Retrieve stored passage embeddings from FAISS index at specified indices"
+
         pointer = self._index.get_xb()
+
         size = self._index.ntotal * self._index.d
+
         all_vectors = faiss.rev_swig_ptr(pointer, size).reshape(self._index.ntotal, self._index.d)
+
         return all_vectors[indices].copy()
 
     def save(self, index_path: str | Path, meta_path: str | Path) -> None:
+
         faiss.write_index(self._index, str(index_path))
+
         with open(meta_path, "wb") as fh:
             pickle.dump({"texts": self._texts, "titles": self._titles}, fh)
+
         logger.info("Saved FAISS index → %s  metadata → %s", index_path, meta_path)
 
     @classmethod
-    def load(cls, index_path: str | Path, meta_path: str | Path) -> 'FAISSIndex':
+    def load(cls, index_path: str | Path, meta_path: str | Path) -> "FAISSIndex":
+
         local_index_path = "./local_faiss.index"
 
         if not os.path.exists(local_index_path):
             index_path_str = str(index_path)
+
             if os.path.exists(index_path_str):
-                # Already on local disk (pre-copied by launch script) — skip the redundant 64 GB copy
                 logger.info("Using pre-copied FAISS index at %s", index_path_str)
+
                 local_index_path = index_path_str
+
             else:
                 logger.info("Downloading 64GB index directly from GCS (bypassing FUSE)...")
+
                 gcs_uri = index_path_str.replace("/gcs/", "gs://")
+
                 try:
-                    subprocess.run(["gcloud", "storage", "cp", gcs_uri, local_index_path], check=True)
+                    subprocess.run(
+                        ["gcloud", "storage", "cp", gcs_uri, local_index_path], check=True
+                    )
+
                 except FileNotFoundError:
                     subprocess.run(["gsutil", "cp", gcs_uri, local_index_path], check=True)
+
                 logger.info("Direct download complete!")
 
         logger.info("Loading FAISS index from local disk...")
+
         index = faiss.read_index(local_index_path)
 
         logger.info("Loading Arrow dataset...")
+
         meta_data = load_from_disk(str(meta_path))
 
         return cls(index=index, meta_data=meta_data)
-    
-    # @classmethod
-    # def load(cls, index_path: str | Path, meta_path: str | Path) -> FAISSIndex:
-    #     index = faiss.read_index(str(index_path))
-        
-    #     # Load the disk-backed Arrow dataset (uses almost 0 RAM)
-    #     meta_data = load_from_disk(str(meta_path))
-        
-    #     return cls(index=index, meta_data=meta_data)
-# class FAISSIndex:
-#     """Wraps a flat FAISS index (inner-product) with passage text lookup."""
-
-#     def __init__(self, index: faiss.Index, texts: list[str], titles: list[str]) -> None:
-#         self._index = index
-#         self._texts = texts
-#         self._titles = titles
-
-#     def search(self, query_emb: np.ndarray, top_k: int) -> list[str]:
-#         """Return top-k passage texts and their FAISS indices for a single (1, D) query embedding."""
-#         q = np.ascontiguousarray(query_emb, dtype=np.float32)
-#         distances, indices = self._index.search(q, top_k)
-#         passages: list[str] = []
-#         valid_indices = []
-#         for idx in indices[0]:
-#             if idx == -1:
-#                 continue
-#             title = self._titles[idx]
-#             text = self._texts[idx]
-#             passages.append(f"{title}\n{text}" if title else text)
-#             valid_indices.append(int(idx))
-#         return passages, valid_indices
-
-#     def get_vectors(self, indices):
-#         'Retrieve stored passage embeddings from FAISS index at specified indices'
-#         pointer = self._index.get_xb()
-#         size = self._index.ntotal * self._index.d
-#         all_vectors = faiss.rev_swig_ptr(pointer, size).reshape(self._index.ntotal, self._index.d)
-#         return all_vectors[indices].copy()
-
-#     def save(self, index_path: str | Path, meta_path: str | Path) -> None:
-#         faiss.write_index(self._index, str(index_path))
-#         with open(meta_path, "wb") as fh:
-#             pickle.dump({"texts": self._texts, "titles": self._titles}, fh)
-#         logger.info("Saved FAISS index → %s  metadata → %s", index_path, meta_path)
-
-#     @classmethod
-#     def load(cls, index_path: str | Path, meta_path: str | Path) -> FAISSIndex:
-#         index = faiss.read_index(str(index_path), faiss.IO_FLAG_MMAP)
-#         # with open(meta_path, "rb") as fh:
-#         #     meta = pickle.load(fh)
-
-#         #  Load the disk-backed Arrow dataset (uses almost 0 RAM)
-#         meta_data = load_from_disk(str(meta_path))
-#         # logger.info("Loaded FAISS index with %d vectors from %s", index.ntotal, index_path)
-#         # return cls(index, meta["texts"], meta["titles"])
-#         return cls(index=index, meta_data=meta_data)
 
 
 def build_index(
@@ -224,25 +241,36 @@ def build_index(
     device: str | None = None,
 ) -> FAISSIndex:
     """Embed all passages and write FAISS flat-IP index to disk."""
+
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+
     logger.info("Loading passages from %s (subset=%s)…", passages_path, passages_subset)
+
     _, texts, titles = load_passages(passages_path, max_passages=passages_subset)
+
     logger.info("Loaded %d passages. Loading Contriever model…", len(texts))
 
     tokenizer = AutoTokenizer.from_pretrained(_CONTRIEVER_MODEL)
+
     model = AutoModel.from_pretrained(_CONTRIEVER_MODEL, use_safetensors=True).to(device)
+
     model.eval()
 
     embeddings = embed_passages(texts, model, tokenizer, device)
 
     logger.info("Building FAISS flat IP index (dim=%d, n=%d)…", _DIM, len(texts))
+
     index = faiss.IndexFlatIP(_DIM)
+
     if device.startswith("cuda"):
         try:
             res = faiss.StandardGpuResources()
+
             index = faiss.index_cpu_to_gpu(res, 0, index)
+
         except Exception:
             logger.warning("faiss-gpu not available; falling back to CPU FAISS index.")
+
     index.add(embeddings)
 
     if device.startswith("cuda"):
@@ -250,7 +278,9 @@ def build_index(
             index = faiss.index_gpu_to_cpu(index)
 
     fi = FAISSIndex(index, texts, titles)
+
     fi.save(index_path, meta_path)
+
     return fi
 
 
@@ -269,8 +299,11 @@ def main(
     ),
     device: str | None = typer.Option(None, help="torch device, e.g. 'cuda' or 'cpu'"),
 ) -> None:
+
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+
     build_index(passages, output, meta, passages_subset=passages_subset, device=device)
+
     print(f"Index written to {output}")
 
 

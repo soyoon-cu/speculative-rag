@@ -138,7 +138,7 @@ def main(
         int(os.getenv("MAX_NEW_TOKENS", "100")), help="Max tokens to generate"
     ),
     split: str = typer.Option("validation", help="TriviaQA split to evaluate on"),
-    sample: int | None = typer.Option(1000, "--sample", "-n", help="Evaluate on N examples"),
+    sample: int | None = typer.Option(None, "--sample", "-n", help="Evaluate on N examples"),
     sample_seed: int | None = typer.Option(
         None,
         "--sample-seed",

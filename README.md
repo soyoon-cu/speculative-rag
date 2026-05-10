@@ -71,7 +71,12 @@ speculative-rag/
 │   ├── pyproject.toml
 │   ├── infra/             ← Terraform: GCS, Artifact Registry, service account
 │   └── src/rag/
-└── speculative-rag/       ← Speculative RAG implementation (in progress)
+└── speculative-rag/       ← Speculative RAG implementation
+    ├── README.md          ← setup & run instructions
+    ├── Makefile
+    ├── Dockerfile
+    ├── submit.sh          ← Vertex AI job launcher
+    └── src/
 ```
 
 Each subdirectory is an independent project with its own environment, Docker image, and GCP infrastructure.
@@ -81,18 +86,23 @@ Each subdirectory is an independent project with its own environment, Docker ima
 | Component             | Status        | Notes |
 |-----------------------|---------------|-------|
 | Standard RAG baseline | **Complete**  | Vertex AI pipeline; see `standard-rag/` |
-| Speculative RAG       | In progress   | |
+| Speculative RAG       | **Implemented** | Drafter, sampler, verifier, Vertex runner; see `speculative-rag/` |
 
 ## Getting Started
 
-See **[standard-rag/README.md](standard-rag/README.md)** for the full setup guide including:
+Use the subproject README that matches the experiment you want to run:
+
+- **[standard-rag/README.md](standard-rag/README.md)** for the baseline Standard RAG pipeline.
+- **[speculative-rag/README.md](speculative-rag/README.md)** for the Speculative RAG drafter/verifier pipeline.
+
+The guides cover:
+
 - GCP project configuration and API enablement
 - GPU quota increase instructions (required — new projects default to 0 GPU quota)
-- Terraform infra provisioning
 - Docker build and push
-- Running smoke tests and full evaluation on Vertex AI
+- Running smoke tests, full evaluations, profiling runs, and result fetches on Vertex AI
 
-### Quick reference
+### Standard RAG quick reference
 
 ```bash
 cd standard-rag
@@ -107,6 +117,32 @@ make vertex-submit               # smoke test (100k passages, 500 examples)
 make vertex-submit ENV=prod      # full eval (21M passages, 11k examples)
 make fetch-results               # download results.json and print table
 ```
+
+### Speculative RAG quick reference
+
+```bash
+cd speculative-rag
+
+# First-time setup
+cp config.mk.example config.mk
+# Edit config.mk with PROJECT_ID, REGION, REPO_NAME, IMAGE_NAME, INDEX_BUCKET, OUTPUT_BUCKET.
+export HF_TOKEN=hf_xxxx
+
+# Build and submit a Vertex AI run
+make build
+make submit ARGS="run_vllm 100"
+
+# Download verifier outputs and profiler traces
+make fetch-results
+```
+
+`ARGS` maps to `submit.sh` as:
+
+```text
+ARGS="<experiment> <n_samples> <index_bucket> <output_bucket>"
+```
+
+Common experiments include `test`, `test_p`, `no_opt`, `nf4`, `int8`, `run_vllm`, `run_m`, `run_k`, `verify_saved`, and `verify_no_opt`.
 
 ## Demo Dashboard
 
